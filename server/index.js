@@ -9,6 +9,7 @@ import { db } from './db.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 4000;
+const STOCK_BAJO_LIMITE = 10;
 
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
@@ -89,6 +90,83 @@ function parseProducto(body) {
   };
 }
 
+function parseMonto(raw, etiqueta) {
+  if (raw === '' || raw === null || raw === undefined) {
+    throw httpError(400, `Ingresá un ${etiqueta} válido`);
+  }
+  const monto = Number(raw);
+  if (!Number.isFinite(monto) || monto < 0) {
+    throw httpError(400, `El ${etiqueta} debe ser un número mayor o igual a 0`);
+  }
+  return round2(monto);
+}
+
+function resumenVentasDia(dia) {
+  const filas = db.prepare('SELECT metodo_pago, total FROM ventas WHERE dia = ?').all(dia);
+  const metodos = new Map();
+  let totalVentas = 0;
+
+  for (const fila of filas) {
+    const total = round2(fila.total);
+    totalVentas = round2(totalVentas + total);
+    const actual = metodos.get(fila.metodo_pago) ?? { metodoPago: fila.metodo_pago, cantidad: 0, total: 0 };
+    actual.cantidad += 1;
+    actual.total = round2(actual.total + total);
+    metodos.set(fila.metodo_pago, actual);
+  }
+
+  const porMetodo = [...metodos.values()].sort(
+    (a, b) => b.total - a.total || a.metodoPago.localeCompare(b.metodoPago, 'es')
+  );
+  const totalEfectivo = metodos.get('Efectivo')?.total ?? 0;
+
+  return {
+    cantidadVentas: filas.length,
+    totalVentas,
+    totalEfectivo: round2(totalEfectivo),
+    totalOtros: round2(totalVentas - totalEfectivo),
+    porMetodo,
+  };
+}
+
+function cajaAObjeto(fila) {
+  if (!fila) return null;
+  return {
+    id: fila.id,
+    dia: fila.dia,
+    montoApertura: fila.monto_apertura,
+    montoCierre: fila.monto_cierre,
+    fechaApertura: fila.fecha_apertura,
+    fechaCierre: fila.fecha_cierre,
+  };
+}
+
+function estadoCaja(dia = localDay()) {
+  const caja = cajaAObjeto(db.prepare('SELECT * FROM cajas WHERE dia = ?').get(dia));
+  const resumen = resumenVentasDia(dia);
+  const efectivoEsperado = caja ? round2(caja.montoApertura + resumen.totalEfectivo) : null;
+  const diferencia =
+    caja && caja.montoCierre !== null ? round2(caja.montoCierre - efectivoEsperado) : null;
+  const anterior = db
+    .prepare(
+      'SELECT monto_cierre FROM cajas WHERE dia < ? AND monto_cierre IS NOT NULL ORDER BY dia DESC LIMIT 1'
+    )
+    .get(dia);
+
+  return {
+    dia,
+    caja,
+    abierta: Boolean(caja && caja.montoCierre === null),
+    cerrada: Boolean(caja && caja.montoCierre !== null),
+    sugerenciaApertura: round2(anterior?.monto_cierre ?? 0),
+    resumen: {
+      ...resumen,
+      efectivoEsperado,
+      diferencia,
+    },
+  };
+}
+
 app.get('/api/productos', (req, res) => {
   const busqueda = String(req.query.busqueda ?? '').trim();
   const categoria = String(req.query.categoria ?? '').trim();
@@ -111,6 +189,66 @@ app.get('/api/productos', (req, res) => {
     .all(...params);
 
   res.json(productos);
+});
+
+app.get('/api/productos/stock-bajo', (_req, res) => {
+  const productos = db
+    .prepare(
+      `SELECT * FROM productos
+       WHERE cantidad < ?
+       ORDER BY cantidad ASC, nombre COLLATE NOCASE ASC`
+    )
+    .all(STOCK_BAJO_LIMITE);
+
+  res.json({ limite: STOCK_BAJO_LIMITE, productos });
+});
+
+app.get('/api/caja', (_req, res) => {
+  res.json(estadoCaja());
+});
+
+app.post('/api/caja/abrir', (req, res, next) => {
+  try {
+    const dia = localDay();
+    const existente = db.prepare('SELECT * FROM cajas WHERE dia = ?').get(dia);
+    if (existente) {
+      throw httpError(
+        409,
+        existente.monto_cierre === null
+          ? 'La caja de hoy ya está abierta'
+          : 'La caja de hoy ya fue cerrada'
+      );
+    }
+
+    const montoApertura = parseMonto(req.body?.montoApertura, 'monto de apertura');
+    db.prepare(
+      'INSERT INTO cajas (dia, monto_apertura, monto_cierre, fecha_apertura, fecha_cierre) VALUES (?, ?, NULL, ?, NULL)'
+    ).run(dia, montoApertura, new Date().toISOString());
+
+    res.status(201).json(estadoCaja(dia));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/caja/cerrar', (req, res, next) => {
+  try {
+    const dia = localDay();
+    const caja = db.prepare('SELECT * FROM cajas WHERE dia = ?').get(dia);
+    if (!caja) throw httpError(409, 'Primero abrí la caja del día');
+    if (caja.monto_cierre !== null) throw httpError(409, 'La caja de hoy ya está cerrada');
+
+    const montoCierre = parseMonto(req.body?.montoCierre, 'monto de cierre');
+    db.prepare('UPDATE cajas SET monto_cierre = ?, fecha_cierre = ? WHERE id = ?').run(
+      montoCierre,
+      new Date().toISOString(),
+      caja.id
+    );
+
+    res.json(estadoCaja(dia));
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/categorias', (_req, res) => {
@@ -391,6 +529,13 @@ app.post('/api/ventas', (req, res, next) => {
     if (metodoPago.length > 40) throw httpError(400, 'Método de pago inválido');
     if (!Array.isArray(items) || items.length === 0) throw httpError(400, 'El carrito está vacío');
 
+    const dia = localDay();
+    const cajaDia = db.prepare('SELECT monto_cierre FROM cajas WHERE dia = ?').get(dia);
+    if (!cajaDia) throw httpError(409, 'Primero abrí la caja del día para registrar ventas');
+    if (cajaDia.monto_cierre !== null) {
+      throw httpError(409, 'La caja de hoy ya está cerrada. No se pueden registrar más ventas');
+    }
+
     const agrupados = new Map();
     for (const item of items) {
       const productoId = Number(item?.productoId);
@@ -437,14 +582,14 @@ app.post('/api/ventas', (req, res, next) => {
           `INSERT INTO ventas (fecha, dia, metodo_pago, total, resumen)
            VALUES (?, ?, ?, ?, ?)`
         )
-        .run(fecha.toISOString(), localDay(fecha), metodoPago, total, JSON.stringify(resumen));
+        .run(fecha.toISOString(), dia, metodoPago, total, JSON.stringify(resumen));
 
       db.exec('COMMIT');
 
       res.status(201).json({
         id: Number(info.lastInsertRowid),
         fecha: fecha.toISOString(),
-        dia: localDay(fecha),
+        dia,
         metodoPago,
         total,
         items: resumen,

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ConfirmModal from './ConfirmModal.jsx';
+import ProductoForm from './ProductoForm.jsx';
 import { IconAlert, IconEdit, IconPlus, IconTag, IconTrash } from './Icons.jsx';
 
 export default function Categorias({
@@ -7,6 +8,7 @@ export default function Categorias({
   onCrear,
   onRenombrar,
   onEliminar,
+  onCrearProducto,
   onIrAInventario,
 }) {
   const [nombre, setNombre] = useState('');
@@ -90,55 +92,59 @@ export default function Categorias({
 
   return (
     <div className="categorias-layout">
-      <section className="card form-card">
-        <div className="card-title">
-          <span className="icon-badge">
-            <IconPlus size={18} />
-          </span>
-          <div>
-            <h2>Nueva categoría</h2>
-            <p className="card-sub">Después vas a poder elegirla al crear o editar productos.</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleCrear} className="formulario">
-          <div className="field">
-            <label htmlFor="nombre-categoria">
-              <IconTag size={13} /> Nombre de la categoría
-            </label>
-            <input
-              id="nombre-categoria"
-              type="text"
-              value={nombre}
-              maxLength={60}
-              placeholder="Ej: Bebidas"
-              onChange={(e) => setNombre(e.target.value)}
-              required
-            />
-          </div>
-
-          {errorCrear && (
-            <div className="alert alert-error" role="alert">
-              <IconAlert size={18} />
-              <span>{errorCrear}</span>
+      <div className="categorias-formularios">
+        <section className="card form-card">
+          <div className="card-title">
+            <span className="icon-badge">
+              <IconPlus size={18} />
+            </span>
+            <div>
+              <h2>Nueva categoría</h2>
+              <p className="card-sub">Después vas a poder elegirla al crear o editar productos.</p>
             </div>
-          )}
+          </div>
 
-          <button type="submit" className="btn btn-primary btn-block" disabled={creando}>
-            {creando ? 'Creando...' : 'Crear categoría'}
-          </button>
-        </form>
+          <form onSubmit={handleCrear} className="formulario">
+            <div className="field">
+              <label htmlFor="nombre-categoria">
+                <IconTag size={13} /> Nombre de la categoría
+              </label>
+              <input
+                id="nombre-categoria"
+                type="text"
+                value={nombre}
+                maxLength={60}
+                placeholder="Ej: Bebidas"
+                onChange={(e) => setNombre(e.target.value)}
+                required
+              />
+            </div>
 
-        <p className="form-help">
-          Solo las categorías creadas acá aparecen en el formulario de productos.
-        </p>
-      </section>
+            {errorCrear && (
+              <div className="alert alert-error" role="alert">
+                <IconAlert size={18} />
+                <span>{errorCrear}</span>
+              </div>
+            )}
+
+            <button type="submit" className="btn btn-primary btn-block" disabled={creando}>
+              {creando ? 'Creando...' : 'Crear categoría'}
+            </button>
+          </form>
+
+          <p className="form-help">
+            Solo las categorías creadas acá aparecen en el formulario de productos.
+          </p>
+        </section>
+
+        <ProductoForm categorias={categorias} onCrear={onCrearProducto} />
+      </div>
 
       <div className="categorias-panel">
         <div className="page-head">
           <div>
             <h1>Categorías</h1>
-            <p>Creá, renombrá o eliminá las categorías que usan tus productos.</p>
+            <p>Creá categorías, cargá productos nuevos y organizá los que ya tenés.</p>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={onIrAInventario}>
             Ir al inventario

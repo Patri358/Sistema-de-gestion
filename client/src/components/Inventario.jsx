@@ -1,5 +1,4 @@
-import { useMemo, useState } from 'react';
-import ProductoForm from './ProductoForm.jsx';
+import { useEffect, useMemo, useState } from 'react';
 import EditarProductoModal from './EditarProductoModal.jsx';
 import ConfirmModal from './ConfirmModal.jsx';
 import {
@@ -7,6 +6,8 @@ import {
   IconCart,
   IconEdit,
   IconImage,
+  IconMinus,
+  IconPlus,
   IconSearch,
   IconTag,
   IconTrash,
@@ -23,7 +24,19 @@ function estadoStock(cantidad) {
 function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) {
   const stock = estadoStock(producto.cantidad);
   const sinStock = producto.cantidad <= 0;
-  const alMaximo = enCarrito >= producto.cantidad;
+  const disponible = Math.max(0, producto.cantidad - enCarrito);
+  const alMaximo = disponible <= 0;
+  const [cantidad, setCantidad] = useState(1);
+
+  useEffect(() => {
+    setCantidad((actual) => Math.min(Math.max(1, actual), Math.max(1, disponible)));
+  }, [disponible]);
+
+  function cambiarCantidad(valor) {
+    const numero = Number(valor);
+    if (!Number.isFinite(numero)) return;
+    setCantidad(Math.min(Math.max(1, Math.floor(numero)), Math.max(1, disponible)));
+  }
 
   return (
     <article className="product-card">
@@ -78,21 +91,53 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) 
           </span>
         </div>
 
-        <button
-          type="button"
-          className="btn btn-primary btn-block btn-sm"
-          onClick={() => onAgregar(producto)}
-          disabled={sinStock || alMaximo}
-        >
-          <IconCart size={16} />
-          {sinStock
-            ? 'Sin stock'
-            : alMaximo
-              ? `En el carrito (${enCarrito})`
-              : enCarrito > 0
-                ? `Agregar otro (${enCarrito})`
-                : 'Agregar al carrito'}
-        </button>
+        <div className="product-buy-row">
+          <div className="qty-picker">
+            <button
+              type="button"
+              aria-label={`Restar una unidad de ${producto.nombre}`}
+              onClick={() => cambiarCantidad(cantidad - 1)}
+              disabled={sinStock || alMaximo || cantidad <= 1}
+            >
+              <IconMinus size={14} />
+            </button>
+            <input
+              type="number"
+              min="1"
+              max={Math.max(1, disponible)}
+              value={cantidad}
+              aria-label={`Cantidad de ${producto.nombre}`}
+              onChange={(e) => cambiarCantidad(e.target.value)}
+              disabled={sinStock || alMaximo}
+            />
+            <button
+              type="button"
+              aria-label={`Sumar una unidad de ${producto.nombre}`}
+              onClick={() => cambiarCantidad(cantidad + 1)}
+              disabled={sinStock || alMaximo || cantidad >= disponible}
+            >
+              <IconPlus size={14} />
+            </button>
+          </div>
+
+          <button
+            type="button"
+            className="btn btn-primary btn-sm product-add"
+            onClick={() => onAgregar(producto, cantidad)}
+            disabled={sinStock || alMaximo}
+          >
+            <IconCart size={16} />
+            {sinStock
+              ? 'Sin stock'
+              : alMaximo
+                ? `En el carrito (${enCarrito})`
+                : cantidad > 1
+                  ? `Agregar ${cantidad}`
+                  : enCarrito > 0
+                    ? 'Agregar otro'
+                    : 'Agregar al carrito'}
+          </button>
+        </div>
       </div>
     </article>
   );
@@ -106,7 +151,6 @@ export default function Inventario({
   cargando,
   carrito,
   onAgregar,
-  onCrear,
   onEditar,
   onEliminar,
   onIrACategorias,
@@ -141,23 +185,16 @@ export default function Inventario({
   }
 
   return (
-    <div className="inventario-layout">
-      <ProductoForm
-        categorias={categorias}
-        onCrear={onCrear}
-        onIrACategorias={onIrACategorias}
-      />
-
-      <div className="productos-panel">
-        <div className="page-head">
-          <div>
-            <h1>Inventario</h1>
-            <p>Buscá por nombre o código de barra, editá el stock y armá el carrito.</p>
-          </div>
-          <span className="count-pill">
-            {productos.length} {productos.length === 1 ? 'producto' : 'productos'}
-          </span>
+    <div className="productos-panel">
+      <div className="page-head">
+        <div>
+          <h1>Inventario</h1>
+          <p>Buscá por nombre o código de barra, editá el stock y armá el carrito.</p>
         </div>
+        <span className="count-pill">
+          {productos.length} {productos.length === 1 ? 'producto' : 'productos'}
+        </span>
+      </div>
 
         <div className="card filters">
           <div className="search-field">
@@ -231,8 +268,8 @@ export default function Inventario({
               {hayFiltros
                 ? 'Probá con otro nombre, código de barra o categoría.'
                 : categorias.length === 0
-                  ? 'Primero creá una categoría y después cargá tu primer producto.'
-                  : 'Cargá el primer producto desde el formulario para empezar.'}
+                  ? 'Primero creá una categoría desde la sección Categorías y después cargá tu primer producto.'
+                  : 'Cargá el primer producto desde la sección Categorías.'}
             </p>
             {hayFiltros ? (
               <button
@@ -243,11 +280,9 @@ export default function Inventario({
                 Ver todos los productos
               </button>
             ) : (
-              categorias.length === 0 && (
-                <button type="button" className="btn btn-secondary" onClick={onIrACategorias}>
-                  Crear categoría
-                </button>
-              )
+              <button type="button" className="btn btn-secondary" onClick={onIrACategorias}>
+                {categorias.length === 0 ? 'Crear categoría' : 'Cargar producto'}
+              </button>
             )}
           </div>
         ) : (
@@ -267,7 +302,6 @@ export default function Inventario({
             ))}
           </div>
         )}
-      </div>
 
       {productoEditando && (
         <EditarProductoModal

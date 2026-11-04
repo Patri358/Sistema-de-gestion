@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api.js';
 import Inventario from './components/Inventario.jsx';
 import Carrito from './components/Carrito.jsx';
 import Ventas from './components/Ventas.jsx';
 import Categorias from './components/Categorias.jsx';
+import StockBajo from './components/StockBajo.jsx';
+import Caja from './components/Caja.jsx';
+import AbrirCajaModal from './components/AbrirCajaModal.jsx';
 import {
   IconAlert,
   IconBox,
@@ -13,14 +16,17 @@ import {
   IconReceipt,
   IconStore,
   IconTag,
+  IconWallet,
   IconX,
 } from './components/Icons.jsx';
-import { formatARS } from './utils.js';
+import { formatARS, todayLocal } from './utils.js';
 
 const TABS = [
   { id: 'inventario', etiqueta: 'Inventario', Icono: IconBox },
+  { id: 'stock-bajo', etiqueta: 'Stock bajo', Icono: IconAlert },
   { id: 'carrito', etiqueta: 'Carrito', Icono: IconCart },
   { id: 'ventas', etiqueta: 'Ventas', Icono: IconReceipt },
+  { id: 'caja', etiqueta: 'Caja', Icono: IconWallet },
   { id: 'categorias', etiqueta: 'Categorías', Icono: IconTag },
 ];
 
@@ -28,6 +34,14 @@ export default function App() {
   const [tab, setTab] = useState('inventario');
   const [productos, setProductos] = useState([]);
   const [categorias, setCategorias] = useState([]);
+  const [stockBajo, setStockBajo] = useState({ limite: 10, productos: [] });
+  const [cargandoStockBajo, setCargandoStockBajo] = useState(true);
+  const [caja, setCaja] = useState(null);
+  const [cargandoCaja, setCargandoCaja] = useState(true);
+  const [mostrarApertura, setMostrarApertura] = useState(false);
+  const cajaSolicitud = useRef(0);
+  const aperturaPreguntada = useRef(false);
+  const diaActual = useRef(todayLocal());
   const [filtros, setFiltros] = useState({ busqueda: '', categoria: '' });
   const [carrito, setCarrito] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -84,6 +98,71 @@ export default function App() {
   }, [refreshKey, notify]);
 
   useEffect(() => {
+    let cancelado = false;
+    setCargandoStockBajo(true);
+    api
+      .getStockBajo()
+      .then((datos) => {
+        if (!cancelado) setStockBajo(datos);
+      })
+      .catch((err) => {
+        if (!cancelado) notify(err.message, 'error');
+      })
+      .finally(() => {
+        if (!cancelado) setCargandoStockBajo(false);
+      });
+
+    return () => {
+      cancelado = true;
+    };
+  }, [refreshKey, notify]);
+
+  useEffect(() => {
+    let cancelado = false;
+    const solicitud = cajaSolicitud.current + 1;
+    cajaSolicitud.current = solicitud;
+    setCargandoCaja(true);
+    api
+      .getCaja()
+      .then((datos) => {
+        if (cancelado || solicitud !== cajaSolicitud.current) return;
+        setCaja(datos);
+        if (!datos.caja && !aperturaPreguntada.current) {
+          aperturaPreguntada.current = true;
+          setMostrarApertura(true);
+        }
+      })
+      .catch((err) => {
+        if (!cancelado && solicitud === cajaSolicitud.current) notify(err.message, 'error');
+      })
+      .finally(() => {
+        if (!cancelado && solicitud === cajaSolicitud.current) setCargandoCaja(false);
+      });
+
+    return () => {
+      cancelado = true;
+    };
+  }, [refreshKey, notify]);
+
+  useEffect(() => {
+    function revisarCambioDeDia() {
+      const hoy = todayLocal();
+      if (hoy === diaActual.current) return;
+      diaActual.current = hoy;
+      aperturaPreguntada.current = false;
+      setMostrarApertura(false);
+      setRefreshKey((valor) => valor + 1);
+    }
+
+    const timer = setInterval(revisarCambioDeDia, 60000);
+    window.addEventListener('focus', revisarCambioDeDia);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', revisarCambioDeDia);
+    };
+  }, []);
+
+  useEffect(() => {
     setFiltros((actual) =>
       actual.categoria && !categorias.some((categoria) => categoria.nombre === actual.categoria)
         ? { ...actual, categoria: '' }
@@ -96,27 +175,42 @@ export default function App() {
     [carrito]
   );
 
-  function agregarAlCarrito(producto) {
+  function agregarAlCarrito(producto, cantidadSolicitada = 1) {
     if (producto.cantidad <= 0) {
       notify(`No hay stock disponible de "${producto.nombre}"`, 'error');
-      return;
+      return 0;
     }
 
     const existente = carrito.find((item) => item.producto.id === producto.id);
-    if (existente && existente.cantidad >= producto.cantidad) {
+    const enCarrito = existente?.cantidad ?? 0;
+    const disponible = producto.cantidad - enCarrito;
+    if (disponible <= 0) {
       notify(`Ya agregaste todo el stock disponible de "${producto.nombre}"`, 'error');
-      return;
+      return 0;
     }
 
-    if (existente) {
-      setCarrito(
-        carrito.map((item) =>
-          item.producto.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item
-        )
+    const solicitada = Math.max(1, Math.floor(Number(cantidadSolicitada) || 1));
+    const agregar = Math.min(solicitada, disponible);
+
+    setCarrito((actual) => {
+      const item = actual.find(({ producto: actualProducto }) => actualProducto.id === producto.id);
+      if (item) {
+        return actual.map((actualItem) =>
+          actualItem.producto.id === producto.id
+            ? { ...actualItem, cantidad: actualItem.cantidad + agregar }
+            : actualItem
+        );
+      }
+      return [...actual, { producto, cantidad: agregar }];
+    });
+
+    if (agregar < solicitada) {
+      notify(
+        `Solo quedaban ${disponible} unidades de "${producto.nombre}". Se agregaron ${agregar}.`,
+        'error'
       );
-    } else {
-      setCarrito([...carrito, { producto, cantidad: 1 }]);
     }
+    return agregar;
   }
 
   function cambiarCantidad(productoId, delta) {
@@ -193,7 +287,42 @@ export default function App() {
     notify('Categoría eliminada');
   }
 
+  async function abrirCaja(montoApertura) {
+    const datos = await api.abrirCaja(montoApertura);
+    cajaSolicitud.current += 1;
+    setCaja(datos);
+    setCargandoCaja(false);
+    setMostrarApertura(false);
+    notify(`Caja abierta con ${formatARS(datos.caja.montoApertura)}`);
+    return datos;
+  }
+
+  async function cerrarCaja(montoCierre) {
+    const datos = await api.cerrarCaja(montoCierre);
+    cajaSolicitud.current += 1;
+    setCaja(datos);
+    setCargandoCaja(false);
+    const diferencia = datos.resumen.diferencia ?? 0;
+    notify(
+      diferencia === 0
+        ? 'Caja cerrada sin diferencias'
+        : `Caja cerrada. Diferencia: ${diferencia > 0 ? '+' : ''}${formatARS(diferencia)}`,
+      diferencia < 0 ? 'error' : 'success'
+    );
+    return datos;
+  }
+
   async function confirmarVenta(metodoPago) {
+    if (!caja?.abierta) {
+      notify(
+        caja?.cerrada
+          ? 'La caja de hoy está cerrada. No se pueden registrar más ventas'
+          : 'Primero abrí la caja del día para registrar ventas',
+        'error'
+      );
+      return;
+    }
+
     setComprando(true);
     try {
       const venta = await api.crearVenta(
@@ -225,7 +354,7 @@ export default function App() {
               <IconStore size={22} />
             </span>
             <span className="brand-text">
-              <strong>Almacén</strong>
+              <strong>Almacén Nona Nene</strong>
               <small>Gestión de inventario</small>
             </span>
           </button>
@@ -243,6 +372,9 @@ export default function App() {
                 <span>{etiqueta}</span>
                 {id === 'carrito' && unidadesCarrito > 0 && (
                   <span className="tab-badge">{unidadesCarrito}</span>
+                )}
+                {id === 'stock-bajo' && stockBajo.productos.length > 0 && (
+                  <span className="tab-badge warning">{stockBajo.productos.length}</span>
                 )}
               </button>
             ))}
@@ -271,10 +403,19 @@ export default function App() {
             cargando={cargando}
             carrito={carrito}
             onAgregar={agregarAlCarrito}
-            onCrear={crearProducto}
             onEditar={editarProducto}
             onEliminar={eliminarProducto}
             onIrACategorias={() => setTab('categorias')}
+          />
+        )}
+
+        {tab === 'stock-bajo' && (
+          <StockBajo
+            datos={stockBajo}
+            cargando={cargandoStockBajo}
+            categorias={categorias}
+            onEditar={editarProducto}
+            onIrAInventario={() => setTab('inventario')}
           />
         )}
 
@@ -287,10 +428,22 @@ export default function App() {
             onConfirmar={confirmarVenta}
             comprando={comprando}
             onIrAComprar={() => setTab('inventario')}
+            cajaAbierta={Boolean(caja?.abierta)}
+            cajaEstado={caja?.cerrada ? 'cerrada' : caja?.abierta ? 'abierta' : 'sin-abrir'}
+            onIrACaja={() => setTab('caja')}
           />
         )}
 
         {tab === 'ventas' && <Ventas refreshKey={refreshKey} />}
+
+        {tab === 'caja' && (
+          <Caja
+            datos={caja}
+            cargando={cargandoCaja}
+            onSolicitarApertura={() => setMostrarApertura(true)}
+            onCerrarCaja={cerrarCaja}
+          />
+        )}
 
         {tab === 'categorias' && (
           <Categorias
@@ -298,6 +451,7 @@ export default function App() {
             onCrear={crearCategoria}
             onRenombrar={renombrarCategoria}
             onEliminar={eliminarCategoria}
+            onCrearProducto={crearProducto}
             onIrAInventario={() => setTab('inventario')}
           />
         )}
@@ -308,6 +462,14 @@ export default function App() {
         <span className="dot">·</span>
         <span>Sistema de almacén</span>
       </footer>
+
+      {mostrarApertura && !caja?.caja && (
+        <AbrirCajaModal
+          sugerencia={caja?.sugerenciaApertura ?? 0}
+          onAbrir={abrirCaja}
+          onCerrar={() => setMostrarApertura(false)}
+        />
+      )}
 
       {toast && (
         <div className={`toast toast-${toast.tipo}`} role="status" key={toast.id}>

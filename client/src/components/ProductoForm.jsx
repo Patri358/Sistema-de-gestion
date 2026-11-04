@@ -11,7 +11,7 @@ const FORM_VACIO = {
   imagen: null,
 };
 
-export default function ProductoForm({ categorias, onCrear, onIrACategorias }) {
+export default function ProductoForm({ categorias, onCrear }) {
   const [form, setForm] = useState(FORM_VACIO);
   const [error, setError] = useState('');
   const [enviando, setEnviando] = useState(false);
@@ -147,14 +147,7 @@ export default function ProductoForm({ categorias, onCrear, onIrACategorias }) {
 
           {categorias.length === 0 && (
             <div className="inline-notice">
-              <span>Primero creá una categoría para poder cargar productos.</span>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={onIrACategorias}
-              >
-                Ir a Categorías
-              </button>
+              <span>Primero creá una categoría con el formulario de arriba.</span>
             </div>
           )}
         </div>

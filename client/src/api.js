@@ -27,6 +27,9 @@ export const api = {
     const qs = params.toString();
     return request(`/productos${qs ? `?${qs}` : ''}`);
   },
+  getStockBajo() {
+    return request('/productos/stock-bajo');
+  },
   crearProducto(producto) {
     return request('/productos', { method: 'POST', body: JSON.stringify(producto) });
   },
@@ -56,6 +59,21 @@ export const api = {
     return request('/ventas', {
       method: 'POST',
       body: JSON.stringify({ metodoPago, items }),
+    });
+  },
+  getCaja() {
+    return request('/caja');
+  },
+  abrirCaja(montoApertura) {
+    return request('/caja/abrir', {
+      method: 'POST',
+      body: JSON.stringify({ montoApertura }),
+    });
+  },
+  cerrarCaja(montoCierre) {
+    return request('/caja/cerrar', {
+      method: 'POST',
+      body: JSON.stringify({ montoCierre }),
     });
   },
   exportarDbUrl: `${BASE}/exportar`,

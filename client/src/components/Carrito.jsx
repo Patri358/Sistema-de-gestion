@@ -20,6 +20,9 @@ export default function Carrito({
   onConfirmar,
   comprando,
   onIrAComprar,
+  cajaAbierta,
+  cajaEstado,
+  onIrACaja,
 }) {
   const [metodoPago, setMetodoPago] = useState('Efectivo');
 
@@ -147,15 +150,38 @@ export default function Carrito({
           </select>
         </div>
 
+        {!cajaAbierta && (
+          <div className={`inline-notice caja-notice ${cajaEstado}`}>
+            <span>
+              {cajaEstado === 'cerrada'
+                ? 'La caja de hoy está cerrada. No se pueden registrar más ventas.'
+                : 'Abrí la caja del día para confirmar la venta.'}
+            </span>
+            <button type="button" className="btn btn-primary btn-sm" onClick={onIrACaja}>
+              Ir a Caja
+            </button>
+          </div>
+        )}
+
         <button
           type="button"
           className="btn btn-primary btn-block"
           onClick={() => onConfirmar(metodoPago)}
-          disabled={comprando}
+          disabled={comprando || !cajaAbierta}
         >
-          {comprando ? 'Registrando venta...' : `Confirmar compra · ${formatARS(total)}`}
+          {!cajaAbierta
+            ? cajaEstado === 'cerrada'
+              ? 'Caja cerrada'
+              : 'Abrí la caja para vender'
+            : comprando
+              ? 'Registrando venta...'
+              : `Confirmar compra · ${formatARS(total)}`}
         </button>
-        <p className="summary-hint">La venta queda guardada y el stock se descuenta automáticamente.</p>
+        <p className="summary-hint">
+          {cajaAbierta
+            ? 'La venta queda guardada y el stock se descuenta automáticamente.'
+            : 'La caja del día debe estar abierta para confirmar la venta.'}
+        </p>
       </aside>
     </div>
   );

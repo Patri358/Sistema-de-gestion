@@ -41,6 +41,15 @@ db.exec(`
     resumen TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS cajas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dia TEXT NOT NULL UNIQUE,
+    monto_apertura REAL NOT NULL CHECK (monto_apertura >= 0),
+    monto_cierre REAL CHECK (monto_cierre IS NULL OR monto_cierre >= 0),
+    fecha_apertura TEXT NOT NULL,
+    fecha_cierre TEXT
+  );
+
   CREATE INDEX IF NOT EXISTS idx_ventas_dia ON ventas (dia);
   CREATE INDEX IF NOT EXISTS idx_productos_nombre ON productos (nombre);
 `);
