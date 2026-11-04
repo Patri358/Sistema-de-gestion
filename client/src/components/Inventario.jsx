@@ -25,9 +25,11 @@ function estadoStock(cantidad) {
 
 function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) {
   const stock = estadoStock(producto.cantidad);
+  const deshabilitado = Number(producto.activo) === 0;
   const sinStock = producto.cantidad <= 0;
   const disponible = Math.max(0, producto.cantidad - enCarrito);
   const alMaximo = disponible <= 0;
+  const bloqueado = deshabilitado || sinStock;
   const [cantidad, setCantidad] = useState(1);
 
   useEffect(() => {
@@ -41,7 +43,7 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) 
   }
 
   return (
-    <article className="product-card">
+    <article className={`product-card ${deshabilitado ? 'deshabilitado' : ''}`}>
       <div className="product-media">
         {producto.imagen ? (
           <img src={producto.imagen} alt={producto.nombre} loading="lazy" />
@@ -51,7 +53,8 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) 
             <IconImage size={22} />
           </div>
         )}
-        {sinStock && <span className="media-tag">Sin stock</span>}
+        {deshabilitado && <span className="media-tag">Deshabilitado</span>}
+        {!deshabilitado && sinStock && <span className="media-tag">Sin stock</span>}
 
         <div className="product-actions">
           <button
@@ -87,7 +90,9 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) 
         <p className="product-price">{formatARS(producto.precio)}</p>
 
         <div className="product-meta">
-          <span className={`chip ${stock.clase}`}>{stock.texto}</span>
+          <span className={`chip ${deshabilitado ? 'chip-disabled' : stock.clase}`}>
+            {deshabilitado ? 'No disponible' : stock.texto}
+          </span>
           <span className="barcode" title="Código de barra">
             {producto.codigo_barras || 'Sin código'}
           </span>
@@ -99,7 +104,7 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) 
               type="button"
               aria-label={`Restar una unidad de ${producto.nombre}`}
               onClick={() => cambiarCantidad(cantidad - 1)}
-              disabled={sinStock || alMaximo || cantidad <= 1}
+              disabled={bloqueado || alMaximo || cantidad <= 1}
             >
               <IconMinus size={14} />
             </button>
@@ -110,13 +115,13 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) 
               value={cantidad}
               aria-label={`Cantidad de ${producto.nombre}`}
               onChange={(e) => cambiarCantidad(e.target.value)}
-              disabled={sinStock || alMaximo}
+              disabled={bloqueado || alMaximo}
             />
             <button
               type="button"
               aria-label={`Sumar una unidad de ${producto.nombre}`}
               onClick={() => cambiarCantidad(cantidad + 1)}
-              disabled={sinStock || alMaximo || cantidad >= disponible}
+              disabled={bloqueado || alMaximo || cantidad >= disponible}
             >
               <IconPlus size={14} />
             </button>
@@ -126,10 +131,12 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) 
             type="button"
             className="btn btn-primary btn-sm product-add"
             onClick={() => onAgregar(producto, cantidad)}
-            disabled={sinStock || alMaximo}
+            disabled={bloqueado || alMaximo}
           >
             <IconCart size={16} />
-            {sinStock
+            {deshabilitado
+              ? 'Deshabilitado'
+              : sinStock
               ? 'Sin stock'
               : alMaximo
                 ? `En el carrito (${enCarrito})`

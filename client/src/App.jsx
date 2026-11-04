@@ -169,6 +169,10 @@ export default function App() {
   }, [categorias]);
 
   function agregarAlCarrito(producto, cantidadSolicitada = 1) {
+    if (Number(producto.activo) === 0) {
+      notify(`"${producto.nombre}" está deshabilitado y no se puede vender`, 'error');
+      return 0;
+    }
     if (producto.cantidad <= 0) {
       notify(`No hay stock disponible de "${producto.nombre}"`, 'error');
       return 0;
@@ -247,7 +251,7 @@ export default function App() {
               }
             : item
         )
-        .filter((item) => item.cantidad > 0)
+        .filter((item) => item.cantidad > 0 && Number(actualizado.activo) !== 0)
     );
     notify(`"${actualizado.nombre}" se actualizó correctamente`);
     return actualizado;
@@ -305,14 +309,14 @@ export default function App() {
     return datos;
   }
 
-  async function editarVenta(id, metodoPago, items) {
-    const actualizada = await api.actualizarVenta(id, metodoPago, items);
+  async function editarVenta(id, metodoPago, items, opciones) {
+    const actualizada = await api.actualizarVenta(id, metodoPago, items, opciones);
     setRefreshKey((valor) => valor + 1);
     notify(`Venta #${id} actualizada por ${formatARS(actualizada.total)}`);
     return actualizada;
   }
 
-  async function confirmarVenta(metodoPago) {
+  async function confirmarVenta(metodoPago, opciones = {}) {
     if (!caja?.abierta) {
       notify(
         caja?.cerrada
@@ -327,7 +331,8 @@ export default function App() {
     try {
       const venta = await api.crearVenta(
         metodoPago,
-        carrito.map(({ producto, cantidad }) => ({ productoId: producto.id, cantidad }))
+        carrito.map(({ producto, cantidad }) => ({ productoId: producto.id, cantidad })),
+        opciones
       );
       setCarrito([]);
       setRefreshKey((valor) => valor + 1);

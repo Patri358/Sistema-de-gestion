@@ -9,6 +9,24 @@ export function formatARS(value) {
   return formatoMoneda.format(Number(value) || 0);
 }
 
+export function calcularDescuento(subtotal, tipo, valor) {
+  const bruto = Math.max(0, Number(subtotal) || 0);
+  const numero = Number(valor);
+  if (valor === '' || valor === null || valor === undefined || !Number.isFinite(numero) || numero <= 0) {
+    return { importe: 0, total: bruto };
+  }
+
+  const importe =
+    tipo === 'porcentaje'
+      ? bruto * (Math.min(numero, 100) / 100)
+      : Math.min(numero, bruto);
+  const redondeado = Math.round((importe + Number.EPSILON) * 100) / 100;
+  return {
+    importe: redondeado,
+    total: Math.round((bruto - redondeado + Number.EPSILON) * 100) / 100,
+  };
+}
+
 export function todayLocal() {
   const ahora = new Date();
   const y = ahora.getFullYear();

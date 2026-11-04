@@ -48,13 +48,25 @@ function validarCategoria(nombre) {
   return categoria.nombre;
 }
 
-function parseProducto(body) {
+function parseProducto(body, activoPorDefecto = 1) {
   const nombre = String(body?.nombre ?? '').trim();
   const categoria = parseCategoriaNombre(body?.categoria);
   const precioRaw = body?.precio;
   const cantidadRaw = body?.cantidad;
   const codigo = String(body?.codigo_barras ?? '').trim();
   const imagen = typeof body?.imagen === 'string' && body.imagen.startsWith('data:image/') ? body.imagen : null;
+  const activoRaw = body?.activo;
+  let activo = activoPorDefecto ? 1 : 0;
+
+  if (activoRaw !== undefined && activoRaw !== null) {
+    if (typeof activoRaw === 'boolean') {
+      activo = activoRaw ? 1 : 0;
+    } else if ([0, 1, '0', '1'].includes(activoRaw)) {
+      activo = Number(activoRaw);
+    } else {
+      throw httpError(400, 'El estado del producto es inválido');
+    }
+  }
 
   if (!nombre) throw httpError(400, 'El nombre del producto es obligatorio');
   if (nombre.length > 120) throw httpError(400, 'El nombre no puede superar los 120 caracteres');
@@ -87,6 +99,7 @@ function parseProducto(body) {
     cantidad,
     codigo_barras: codigo || null,
     imagen,
+    activo,
   };
 }
 
@@ -252,7 +265,7 @@ app.get('/api/productos/stock-bajo', (_req, res) => {
   const productos = db
     .prepare(
       `SELECT * FROM productos
-       WHERE cantidad < ?
+       WHERE cantidad < ? AND activo = 1
        ORDER BY cantidad ASC, nombre COLLATE NOCASE ASC`
     )
     .all(STOCK_BAJO_LIMITE);
@@ -419,8 +432,8 @@ app.post('/api/productos', (req, res, next) => {
     try {
       info = db
         .prepare(
-          `INSERT INTO productos (nombre, categoria, precio, cantidad, imagen, codigo_barras)
-           VALUES (?, ?, ?, ?, ?, ?)`
+          `INSERT INTO productos (nombre, categoria, precio, cantidad, imagen, codigo_barras, activo)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           producto.nombre,
@@ -428,7 +441,8 @@ app.post('/api/productos', (req, res, next) => {
           producto.precio,
           producto.cantidad,
           producto.imagen,
-          producto.codigo_barras
+          producto.codigo_barras,
+          producto.activo
         );
     } catch (error) {
       if (String(error.message).includes('UNIQUE constraint failed')) {
@@ -454,11 +468,11 @@ app.put('/api/productos/:id', (req, res, next) => {
     const existente = db.prepare('SELECT * FROM productos WHERE id = ?').get(id);
     if (!existente) throw httpError(404, 'Producto no encontrado');
 
-    const producto = parseProducto(req.body);
+    const producto = parseProducto(req.body, existente.activo);
     try {
       db.prepare(
         `UPDATE productos
-         SET nombre = ?, categoria = ?, precio = ?, cantidad = ?, imagen = ?, codigo_barras = ?
+         SET nombre = ?, categoria = ?, precio = ?, cantidad = ?, imagen = ?, codigo_barras = ?, activo = ?
          WHERE id = ?`
       ).run(
         producto.nombre,
@@ -467,6 +481,7 @@ app.put('/api/productos/:id', (req, res, next) => {
         producto.cantidad,
         producto.imagen,
         producto.codigo_barras,
+        producto.activo,
         id
       );
     } catch (error) {
@@ -587,19 +602,75 @@ function parseVenta(metodoPagoRaw, items) {
   return { metodoPago, agrupados };
 }
 
+function parseDescuento(tipoRaw, valorRaw, subtotal) {
+  const tipo = String(tipoRaw ?? '').trim();
+  const valorVacio = valorRaw === '' || valorRaw === null || valorRaw === undefined;
+  const valor = Number(valorRaw);
+
+  if (valorVacio || !Number.isFinite(valor) || valor === 0) {
+    return { descuentoTipo: null, descuentoValor: 0, descuento: 0 };
+  }
+  if (valor < 0) throw httpError(400, 'El descuento no puede ser negativo');
+
+  if (tipo === 'porcentaje') {
+    if (valor > 100) throw httpError(400, 'El descuento no puede superar el 100%');
+    return {
+      descuentoTipo: tipo,
+      descuentoValor: round2(valor),
+      descuento: round2((subtotal * valor) / 100),
+    };
+  }
+
+  if (tipo === 'monto') {
+    if (valor > subtotal) throw httpError(400, 'El descuento no puede superar el subtotal');
+    return {
+      descuentoTipo: tipo,
+      descuentoValor: round2(valor),
+      descuento: round2(valor),
+    };
+  }
+
+  throw httpError(400, 'El tipo de descuento es inválido');
+}
+
+function parsePagoCon(metodoPago, pagoRaw, total) {
+  if (metodoPago !== 'Efectivo' || pagoRaw === '' || pagoRaw === null || pagoRaw === undefined) {
+    return { pagoCon: null, vuelto: null };
+  }
+
+  const pagoCon = Number(pagoRaw);
+  if (!Number.isFinite(pagoCon) || pagoCon < 0) {
+    throw httpError(400, 'El monto pagado debe ser un número mayor o igual a 0');
+  }
+  if (pagoCon < total) {
+    throw httpError(400, 'El monto pagado no alcanza a cubrir el total de la venta');
+  }
+
+  return { pagoCon: round2(pagoCon), vuelto: round2(pagoCon - total) };
+}
+
 app.get('/api/ventas', (req, res, next) => {
   try {
     const { periodo, valor, where, params } = parsePeriodoVentas(req.query);
 
     const filas = db.prepare(`SELECT * FROM ventas WHERE ${where} ORDER BY fecha DESC`).all(...params);
-    const ventas = filas.map((fila) => ({
-      id: fila.id,
-      fecha: fila.fecha,
-      dia: fila.dia,
-      metodoPago: fila.metodo_pago,
-      total: fila.total,
-      items: JSON.parse(fila.resumen),
-    }));
+    const ventas = filas.map((fila) => {
+      const items = JSON.parse(fila.resumen);
+      return {
+        id: fila.id,
+        fecha: fila.fecha,
+        dia: fila.dia,
+        metodoPago: fila.metodo_pago,
+        subtotal: round2(items.reduce((suma, item) => suma + item.subtotal, 0)),
+        descuento: round2(fila.descuento ?? 0),
+        descuentoTipo: fila.descuento_tipo ?? null,
+        descuentoValor: round2(fila.descuento_valor ?? 0),
+        pagoCon: fila.pago_con ?? null,
+        vuelto: fila.vuelto ?? null,
+        total: fila.total,
+        items,
+      };
+    });
 
     const totalPeriodo = round2(ventas.reduce((acc, venta) => acc + venta.total, 0));
     const unidades = ventas.reduce(
@@ -643,9 +714,9 @@ app.get('/api/ventas', (req, res, next) => {
   }
 });
 
-function construirResumenConStock(agrupados) {
+function construirResumenConStock(agrupados, permitirInactivos = new Set()) {
   const buscarProducto = db.prepare(
-    'SELECT id, nombre, categoria, precio, cantidad, codigo_barras FROM productos WHERE id = ?'
+    'SELECT id, nombre, categoria, precio, cantidad, codigo_barras, activo FROM productos WHERE id = ?'
   );
   const actualizarStock = db.prepare('UPDATE productos SET cantidad = cantidad - ? WHERE id = ?');
   const resumen = [];
@@ -654,6 +725,9 @@ function construirResumenConStock(agrupados) {
   for (const [productoId, cantidad] of agrupados) {
     const producto = buscarProducto.get(productoId);
     if (!producto) throw httpError(404, 'Uno de los productos del carrito ya no existe');
+    if (!producto.activo && !permitirInactivos.has(producto.id)) {
+      throw httpError(409, `El producto "${producto.nombre}" está deshabilitado`);
+    }
     if (producto.cantidad < cantidad) {
       throw httpError(
         409,
@@ -688,14 +762,33 @@ app.post('/api/ventas', (req, res, next) => {
 
     db.exec('BEGIN IMMEDIATE');
     try {
-      const { resumen, total } = construirResumenConStock(agrupados);
+      const { resumen, total: subtotal } = construirResumenConStock(agrupados);
+      const { descuentoTipo, descuentoValor, descuento } = parseDescuento(
+        req.body?.descuentoTipo,
+        req.body?.descuentoValor,
+        subtotal
+      );
+      const total = round2(subtotal - descuento);
+      const { pagoCon, vuelto } = parsePagoCon(metodoPago, req.body?.pagoCon, total);
       const fecha = new Date();
       const info = db
         .prepare(
-          `INSERT INTO ventas (fecha, dia, metodo_pago, total, resumen)
-           VALUES (?, ?, ?, ?, ?)`
+          `INSERT INTO ventas
+             (fecha, dia, metodo_pago, total, descuento, descuento_tipo, descuento_valor, pago_con, vuelto, resumen)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(fecha.toISOString(), dia, metodoPago, total, JSON.stringify(resumen));
+        .run(
+          fecha.toISOString(),
+          dia,
+          metodoPago,
+          total,
+          descuento,
+          descuentoTipo,
+          descuentoValor,
+          pagoCon,
+          vuelto,
+          JSON.stringify(resumen)
+        );
 
       db.exec('COMMIT');
 
@@ -704,6 +797,12 @@ app.post('/api/ventas', (req, res, next) => {
         fecha: fecha.toISOString(),
         dia,
         metodoPago,
+        subtotal,
+        descuento,
+        descuentoTipo,
+        descuentoValor,
+        pagoCon,
+        vuelto,
         total,
         items: resumen,
       });
@@ -726,6 +825,12 @@ app.put('/api/ventas/:id', (req, res, next) => {
 
     const { metodoPago, agrupados } = parseVenta(req.body?.metodoPago, req.body?.items);
     const itemsAnteriores = JSON.parse(existente.resumen);
+    const productosAnteriores = new Set(itemsAnteriores.map((item) => item.productoId));
+    const tipoRaw =
+      req.body?.descuentoTipo !== undefined ? req.body.descuentoTipo : existente.descuento_tipo;
+    const valorRaw =
+      req.body?.descuentoValor !== undefined ? req.body.descuentoValor : existente.descuento_valor;
+    const pagoRaw = req.body?.pagoCon !== undefined ? req.body.pagoCon : existente.pago_con;
 
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -734,10 +839,34 @@ app.put('/api/ventas/:id', (req, res, next) => {
         restaurarStock.run(item.cantidad, item.productoId);
       }
 
-      const { resumen, total } = construirResumenConStock(agrupados);
+      const { resumen, total: subtotal } = construirResumenConStock(
+        agrupados,
+        productosAnteriores
+      );
+      const { descuentoTipo, descuentoValor, descuento } = parseDescuento(
+        tipoRaw,
+        valorRaw,
+        subtotal
+      );
+      const total = round2(subtotal - descuento);
+      const { pagoCon, vuelto } = parsePagoCon(metodoPago, pagoRaw, total);
+
       db.prepare(
-        'UPDATE ventas SET metodo_pago = ?, total = ?, resumen = ? WHERE id = ?'
-      ).run(metodoPago, total, JSON.stringify(resumen), id);
+        `UPDATE ventas
+         SET metodo_pago = ?, total = ?, descuento = ?, descuento_tipo = ?, descuento_valor = ?,
+             pago_con = ?, vuelto = ?, resumen = ?
+         WHERE id = ?`
+      ).run(
+        metodoPago,
+        total,
+        descuento,
+        descuentoTipo,
+        descuentoValor,
+        pagoCon,
+        vuelto,
+        JSON.stringify(resumen),
+        id
+      );
 
       db.exec('COMMIT');
 
@@ -746,6 +875,12 @@ app.put('/api/ventas/:id', (req, res, next) => {
         fecha: existente.fecha,
         dia: existente.dia,
         metodoPago,
+        subtotal,
+        descuento,
+        descuentoTipo,
+        descuentoValor,
+        pagoCon,
+        vuelto,
         total,
         items: resumen,
       });

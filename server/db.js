@@ -10,7 +10,9 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-export const dbPath = path.join(dataDir, 'almacen.db');
+const dbPathEnv = process.env.ALMACEN_DB_PATH;
+export const dbPath =
+  dbPathEnv && path.isAbsolute(dbPathEnv) ? dbPathEnv : path.join(dataDir, dbPathEnv || 'almacen.db');
 export const db = new DatabaseSync(dbPath);
 
 db.exec(`
@@ -29,7 +31,8 @@ db.exec(`
     precio REAL NOT NULL CHECK (precio >= 0),
     cantidad INTEGER NOT NULL DEFAULT 0 CHECK (cantidad >= 0),
     imagen TEXT,
-    codigo_barras TEXT UNIQUE
+    codigo_barras TEXT UNIQUE,
+    activo INTEGER NOT NULL DEFAULT 1
   );
 
   CREATE TABLE IF NOT EXISTS ventas (
@@ -38,6 +41,11 @@ db.exec(`
     dia TEXT NOT NULL,
     metodo_pago TEXT NOT NULL,
     total REAL NOT NULL CHECK (total >= 0),
+    descuento REAL NOT NULL DEFAULT 0,
+    descuento_tipo TEXT,
+    descuento_valor REAL NOT NULL DEFAULT 0,
+    pago_con REAL,
+    vuelto REAL,
     resumen TEXT NOT NULL
   );
 
@@ -53,6 +61,20 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ventas_dia ON ventas (dia);
   CREATE INDEX IF NOT EXISTS idx_productos_nombre ON productos (nombre);
 `);
+
+function asegurarColumna(tabla, columna, definicion) {
+  const columnas = db.prepare(`PRAGMA table_info(${tabla})`).all();
+  if (!columnas.some((fila) => fila.name === columna)) {
+    db.exec(`ALTER TABLE ${tabla} ADD COLUMN ${columna} ${definicion}`);
+  }
+}
+
+asegurarColumna('productos', 'activo', 'INTEGER NOT NULL DEFAULT 1');
+asegurarColumna('ventas', 'descuento', 'REAL NOT NULL DEFAULT 0');
+asegurarColumna('ventas', 'descuento_tipo', 'TEXT');
+asegurarColumna('ventas', 'descuento_valor', 'REAL NOT NULL DEFAULT 0');
+asegurarColumna('ventas', 'pago_con', 'REAL');
+asegurarColumna('ventas', 'vuelto', 'REAL');
 
 const cajasSql = db
   .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cajas'")

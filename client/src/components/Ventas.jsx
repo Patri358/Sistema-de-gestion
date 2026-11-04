@@ -276,6 +276,48 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
                           ))}
                         </tbody>
                       </table>
+
+                      {(venta.descuento > 0 ||
+                        venta.pagoCon !== null ||
+                        venta.vuelto !== null) && (
+                        <div className="venta-detalle-resumen">
+                          {venta.descuento > 0 && (
+                            <>
+                              <div className="summary-row">
+                                <span>Subtotal</span>
+                                <span>{formatARS(venta.subtotal)}</span>
+                              </div>
+                              <div className="summary-row descuento-row">
+                                <span>
+                                  Descuento
+                                  {venta.descuentoTipo === 'porcentaje' &&
+                                  venta.descuentoValor > 0
+                                    ? ` (${venta.descuentoValor}%)`
+                                    : ''}
+                                </span>
+                                <span>-{formatARS(venta.descuento)}</span>
+                              </div>
+                            </>
+                          )}
+                          {venta.pagoCon !== null && (
+                            <div className="summary-row">
+                              <span>Pagó con</span>
+                              <span>{formatARS(venta.pagoCon)}</span>
+                            </div>
+                          )}
+                          {venta.vuelto !== null && (
+                            <div className="summary-row vuelto-row">
+                              <span>Vuelto</span>
+                              <span>{formatARS(venta.vuelto)}</span>
+                            </div>
+                          )}
+                          <div className="summary-row venta-detalle-total">
+                            <span>Total</span>
+                            <strong>{formatARS(venta.total)}</strong>
+                          </div>
+                        </div>
+                      )}
+
                       <div className="venta-detalle-acciones">
                         <button
                           type="button"

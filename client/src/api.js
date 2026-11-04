@@ -59,16 +59,16 @@ export const api = {
     const params = new URLSearchParams({ periodo, valor });
     return request(`/ventas?${params.toString()}`);
   },
-  crearVenta(metodoPago, items) {
+  crearVenta(metodoPago, items, opciones = {}) {
     return request('/ventas', {
       method: 'POST',
-      body: JSON.stringify({ metodoPago, items }),
+      body: JSON.stringify({ metodoPago, items, ...opciones }),
     });
   },
-  actualizarVenta(id, metodoPago, items) {
+  actualizarVenta(id, metodoPago, items, opciones = {}) {
     return request(`/ventas/${id}`, {
       method: 'PUT',
-      body: JSON.stringify({ metodoPago, items }),
+      body: JSON.stringify({ metodoPago, items, ...opciones }),
     });
   },
   getCaja() {

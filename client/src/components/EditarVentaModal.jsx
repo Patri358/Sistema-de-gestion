@@ -9,7 +9,7 @@ import {
   IconTrash,
   IconWallet,
 } from './Icons.jsx';
-import { formatARS, formatFechaCorta, formatHora } from '../utils.js';
+import { calcularDescuento, formatARS, formatFechaCorta, formatHora } from '../utils.js';
 import { api } from '../api.js';
 
 export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
@@ -22,6 +22,13 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
       precio: item.precio,
       cantidad: item.cantidad,
     }))
+  );
+  const [descuentoTipo, setDescuentoTipo] = useState(venta.descuentoTipo || 'porcentaje');
+  const [descuentoValor, setDescuentoValor] = useState(
+    Number(venta.descuentoValor) > 0 ? String(venta.descuentoValor) : ''
+  );
+  const [pagoCon, setPagoCon] = useState(
+    venta.pagoCon !== null && venta.pagoCon !== undefined ? String(venta.pagoCon) : ''
   );
   const [productos, setProductos] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -89,6 +96,10 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
       setError('Elegí un producto para agregar');
       return;
     }
+    if (Number(producto.activo) === 0) {
+      setError(`"${producto.nombre}" está deshabilitado y no se puede vender`);
+      return;
+    }
     if (producto.cantidad <= 0) {
       setError(`No hay stock disponible de "${producto.nombre}"`);
       return;
@@ -120,13 +131,28 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
       setError('La venta debe tener al menos un producto');
       return;
     }
+    if (!pagoSuficiente) {
+      setError('El monto pagado no alcanza a cubrir el total de la venta');
+      return;
+    }
+
+    const limiteDescuento = descuentoTipo === 'porcentaje' ? 100 : subtotal;
+    const valorDescuento = Math.max(0, Math.min(Number(descuentoValor) || 0, limiteDescuento));
 
     setGuardando(true);
     try {
       await onGuardar(
         venta.id,
         metodoPago,
-        items.map((item) => ({ productoId: item.productoId, cantidad: item.cantidad }))
+        items.map((item) => ({ productoId: item.productoId, cantidad: item.cantidad })),
+        {
+          descuentoTipo: descuento > 0 ? descuentoTipo : null,
+          descuentoValor: descuento > 0 ? valorDescuento : 0,
+          pagoCon:
+            metodoPago === 'Efectivo' && pagoCon.trim() !== '' && Number.isFinite(Number(pagoCon))
+              ? Number(pagoCon)
+              : null,
+        }
       );
       onCerrar();
     } catch (err) {
@@ -136,10 +162,23 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
     }
   }
 
-  const total = items.reduce((suma, item) => suma + item.precio * item.cantidad, 0);
+  const subtotal = items.reduce((suma, item) => suma + item.precio * item.cantidad, 0);
+  const { importe: descuento, total } = calcularDescuento(subtotal, descuentoTipo, descuentoValor);
+  const pagoConNumero = Number(pagoCon);
+  const pagoConCargado = pagoCon.trim() !== '';
+  const pagoSuficiente =
+    metodoPago !== 'Efectivo' ||
+    !pagoConCargado ||
+    (Number.isFinite(pagoConNumero) && pagoConNumero >= total);
+  const vuelto =
+    metodoPago === 'Efectivo' && pagoConCargado && pagoSuficiente
+      ? Math.round((pagoConNumero - total + Number.EPSILON) * 100) / 100
+      : null;
   const productosParaAgregar = productos.filter(
     (producto) =>
-      producto.cantidad > 0 && !items.some((item) => item.productoId === producto.id)
+      Number(producto.activo) !== 0 &&
+      producto.cantidad > 0 &&
+      !items.some((item) => item.productoId === producto.id)
   );
 
   return (
@@ -256,9 +295,50 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
           </button>
         </div>
 
-        <div className="venta-edit-total">
-          <span>Total actualizado</span>
-          <strong>{formatARS(total)}</strong>
+        <div className="venta-edit-resumen">
+          <div className="summary-row">
+            <span>Subtotal</span>
+            <span>{formatARS(subtotal)}</span>
+          </div>
+
+          <div className="descuento-control">
+            <label htmlFor="editar-descuento-valor">Descuento</label>
+            <div className="descuento-inputs">
+              <select
+                id="editar-descuento-tipo"
+                aria-label="Tipo de descuento"
+                value={descuentoTipo}
+                onChange={(e) => setDescuentoTipo(e.target.value)}
+              >
+                <option value="porcentaje">%</option>
+                <option value="monto">$</option>
+              </select>
+              <input
+                id="editar-descuento-valor"
+                type="number"
+                min="0"
+                max={descuentoTipo === 'porcentaje' ? 100 : subtotal}
+                step="0.01"
+                inputMode="decimal"
+                placeholder="0"
+                aria-label="Descuento"
+                value={descuentoValor}
+                onChange={(e) => setDescuentoValor(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {descuento > 0 && (
+            <div className="summary-row descuento-row">
+              <span>Descuento aplicado</span>
+              <span>-{formatARS(descuento)}</span>
+            </div>
+          )}
+
+          <div className="venta-edit-total">
+            <span>Total actualizado</span>
+            <strong>{formatARS(total)}</strong>
+          </div>
         </div>
 
         <div className="field">
@@ -277,6 +357,35 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
             ))}
           </select>
         </div>
+
+        {metodoPago === 'Efectivo' && (
+          <div className="efectivo-pago">
+            <div className="field">
+              <label htmlFor="editar-pago-con">
+                ¿Con cuánto pagó? <span className="optional-tag">opcional</span>
+              </label>
+              <input
+                id="editar-pago-con"
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={pagoCon}
+                placeholder={formatARS(total)}
+                onChange={(e) => setPagoCon(e.target.value)}
+              />
+            </div>
+            {vuelto !== null && (
+              <div className="vuelto-box">
+                <span>Vuelto</span>
+                <strong>{formatARS(vuelto)}</strong>
+              </div>
+            )}
+            {pagoConCargado && !pagoSuficiente && (
+              <p className="summary-hint error">El monto pagado no alcanza a cubrir el total.</p>
+            )}
+          </div>
+        )}
 
         {error && (
           <div className="alert alert-error" role="alert">

@@ -11,6 +11,7 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
     cantidad: String(producto.cantidad),
     codigo_barras: producto.codigo_barras || '',
     imagen: producto.imagen || null,
+    activo: Number(producto.activo ?? 1) !== 0,
   });
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
@@ -86,6 +87,7 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
         cantidad: Number(form.cantidad),
         codigo_barras: form.codigo_barras.trim(),
         imagen: form.imagen,
+        activo: form.activo,
       });
       onCerrar();
     } catch (err) {
@@ -188,6 +190,24 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
             placeholder="Opcional"
             onChange={(e) => setCampo('codigo_barras', e.target.value)}
           />
+        </div>
+
+        <div className="field">
+          <span className="label">Estado del producto</span>
+          <button
+            type="button"
+            className={`estado-toggle ${form.activo ? 'habilitado' : 'deshabilitado'}`}
+            aria-pressed={!form.activo}
+            onClick={() => setCampo('activo', !form.activo)}
+          >
+            <span className="estado-toggle-dot" />
+            {form.activo ? 'Habilitado para vender' : 'Deshabilitado'}
+          </button>
+          <small className="field-hint">
+            {form.activo
+              ? 'Deshabilitá el producto para sacarlo de Stock bajo y bloquear su venta.'
+              : 'No aparece en Stock bajo y no se puede agregar al carrito.'}
+          </small>
         </div>
 
         <div className="field">
