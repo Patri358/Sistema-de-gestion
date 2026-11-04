@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import { api } from '../api.js';
 import EditarProductoModal from './EditarProductoModal.jsx';
 import ConfirmModal from './ConfirmModal.jsx';
 import {
+  IconBarcode,
   IconBox,
   IconCart,
   IconEdit,
@@ -159,6 +161,9 @@ export default function Inventario({
   const [productoAEliminar, setProductoAEliminar] = useState(null);
   const [eliminando, setEliminando] = useState(false);
   const [errorEliminar, setErrorEliminar] = useState('');
+  const [codigoEscaneo, setCodigoEscaneo] = useState('');
+  const [buscandoCodigo, setBuscandoCodigo] = useState(false);
+  const [mensajeCodigo, setMensajeCodigo] = useState(null);
 
   const cantidadesEnCarrito = useMemo(() => {
     const mapa = new Map();
@@ -184,6 +189,29 @@ export default function Inventario({
     }
   }
 
+  async function escanearCodigo(event) {
+    event.preventDefault();
+    const codigo = codigoEscaneo.trim();
+    if (!codigo || buscandoCodigo) return;
+
+    setBuscandoCodigo(true);
+    setMensajeCodigo(null);
+    try {
+      const producto = await api.buscarProductoCodigo(codigo);
+      const agregadas = onAgregar(producto, 1);
+      setMensajeCodigo(
+        agregadas
+          ? { tipo: 'ok', texto: `"${producto.nombre}" agregado al carrito` }
+          : { tipo: 'error', texto: `No se pudo agregar "${producto.nombre}"` }
+      );
+      setCodigoEscaneo('');
+    } catch (err) {
+      setMensajeCodigo({ tipo: 'error', texto: err.message });
+    } finally {
+      setBuscandoCodigo(false);
+    }
+  }
+
   return (
     <div className="productos-panel">
       <div className="page-head">
@@ -195,6 +223,30 @@ export default function Inventario({
           {productos.length} {productos.length === 1 ? 'producto' : 'productos'}
         </span>
       </div>
+
+      <form className="card scan-bar" onSubmit={escanearCodigo}>
+        <div className="scan-field">
+          <IconBarcode size={20} />
+          <input
+            type="text"
+            value={codigoEscaneo}
+            placeholder="Escaneá o escribí un código de barras y presioná Enter"
+            aria-label="Código de barras para agregar al carrito"
+            onChange={(e) => setCodigoEscaneo(e.target.value)}
+            autoFocus
+            disabled={buscandoCodigo}
+          />
+        </div>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={buscandoCodigo || !codigoEscaneo.trim()}>
+          <IconCart size={16} />
+          {buscandoCodigo ? 'Buscando...' : 'Agregar'}
+        </button>
+        {mensajeCodigo && (
+          <span className={`scan-feedback ${mensajeCodigo.tipo}`} role="status">
+            {mensajeCodigo.texto}
+          </span>
+        )}
+      </form>
 
         <div className="card filters">
           <div className="search-field">

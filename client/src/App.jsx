@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import Inventario from './components/Inventario.jsx';
 import Carrito from './components/Carrito.jsx';
@@ -10,7 +10,6 @@ import AbrirCajaModal from './components/AbrirCajaModal.jsx';
 import {
   IconAlert,
   IconBox,
-  IconCart,
   IconCheck,
   IconDownload,
   IconReceipt,
@@ -24,7 +23,6 @@ import { formatARS, todayLocal } from './utils.js';
 const TABS = [
   { id: 'inventario', etiqueta: 'Inventario', Icono: IconBox },
   { id: 'stock-bajo', etiqueta: 'Stock bajo', Icono: IconAlert },
-  { id: 'carrito', etiqueta: 'Carrito', Icono: IconCart },
   { id: 'ventas', etiqueta: 'Ventas', Icono: IconReceipt },
   { id: 'caja', etiqueta: 'Caja', Icono: IconWallet },
   { id: 'categorias', etiqueta: 'Categorías', Icono: IconTag },
@@ -127,7 +125,7 @@ export default function App() {
       .then((datos) => {
         if (cancelado || solicitud !== cajaSolicitud.current) return;
         setCaja(datos);
-        if (!datos.caja && !aperturaPreguntada.current) {
+        if (!datos.caja && (datos.sesiones?.length ?? 0) === 0 && !aperturaPreguntada.current) {
           aperturaPreguntada.current = true;
           setMostrarApertura(true);
         }
@@ -169,11 +167,6 @@ export default function App() {
         : actual
     );
   }, [categorias]);
-
-  const unidadesCarrito = useMemo(
-    () => carrito.reduce((suma, item) => suma + item.cantidad, 0),
-    [carrito]
-  );
 
   function agregarAlCarrito(producto, cantidadSolicitada = 1) {
     if (producto.cantidad <= 0) {
@@ -312,6 +305,13 @@ export default function App() {
     return datos;
   }
 
+  async function editarVenta(id, metodoPago, items) {
+    const actualizada = await api.actualizarVenta(id, metodoPago, items);
+    setRefreshKey((valor) => valor + 1);
+    notify(`Venta #${id} actualizada por ${formatARS(actualizada.total)}`);
+    return actualizada;
+  }
+
   async function confirmarVenta(metodoPago) {
     if (!caja?.abierta) {
       notify(
@@ -370,8 +370,10 @@ export default function App() {
               >
                 <Icono size={18} />
                 <span>{etiqueta}</span>
-                {id === 'carrito' && unidadesCarrito > 0 && (
-                  <span className="tab-badge">{unidadesCarrito}</span>
+                {id === 'inventario' && carrito.length > 0 && (
+                  <span className="tab-badge">
+                    {carrito.reduce((suma, item) => suma + item.cantidad, 0)}
+                  </span>
                 )}
                 {id === 'stock-bajo' && stockBajo.productos.length > 0 && (
                   <span className="tab-badge warning">{stockBajo.productos.length}</span>
@@ -395,18 +397,31 @@ export default function App() {
 
       <main className="app-main">
         {tab === 'inventario' && (
-          <Inventario
-            productos={productos}
-            categorias={categorias}
-            filtros={filtros}
-            onFiltros={setFiltros}
-            cargando={cargando}
-            carrito={carrito}
-            onAgregar={agregarAlCarrito}
-            onEditar={editarProducto}
-            onEliminar={eliminarProducto}
-            onIrACategorias={() => setTab('categorias')}
-          />
+          <div className="inventario-layout">
+            <Inventario
+              productos={productos}
+              categorias={categorias}
+              filtros={filtros}
+              onFiltros={setFiltros}
+              cargando={cargando}
+              carrito={carrito}
+              onAgregar={agregarAlCarrito}
+              onEditar={editarProducto}
+              onEliminar={eliminarProducto}
+              onIrACategorias={() => setTab('categorias')}
+            />
+            <Carrito
+              carrito={carrito}
+              onCambiarCantidad={cambiarCantidad}
+              onQuitar={quitarDelCarrito}
+              onVaciar={vaciarCarrito}
+              onConfirmar={confirmarVenta}
+              comprando={comprando}
+              cajaAbierta={Boolean(caja?.abierta)}
+              cajaEstado={caja?.abierta ? 'abierta' : caja?.cerrada ? 'cerrada' : 'sin-abrir'}
+              onIrACaja={() => setTab('caja')}
+            />
+          </div>
         )}
 
         {tab === 'stock-bajo' && (
@@ -419,22 +434,7 @@ export default function App() {
           />
         )}
 
-        {tab === 'carrito' && (
-          <Carrito
-            carrito={carrito}
-            onCambiarCantidad={cambiarCantidad}
-            onQuitar={quitarDelCarrito}
-            onVaciar={vaciarCarrito}
-            onConfirmar={confirmarVenta}
-            comprando={comprando}
-            onIrAComprar={() => setTab('inventario')}
-            cajaAbierta={Boolean(caja?.abierta)}
-            cajaEstado={caja?.cerrada ? 'cerrada' : caja?.abierta ? 'abierta' : 'sin-abrir'}
-            onIrACaja={() => setTab('caja')}
-          />
-        )}
-
-        {tab === 'ventas' && <Ventas refreshKey={refreshKey} />}
+        {tab === 'ventas' && <Ventas refreshKey={refreshKey} onEditarVenta={editarVenta} />}
 
         {tab === 'caja' && (
           <Caja

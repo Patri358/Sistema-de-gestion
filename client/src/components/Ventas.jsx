@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import GraficoVentas from './GraficoVentas.jsx';
+import EditarVentaModal from './EditarVentaModal.jsx';
 import {
   IconBox,
   IconChevron,
   IconDownload,
+  IconEdit,
   IconReceipt,
   IconRefresh,
   IconWallet,
@@ -23,7 +25,7 @@ const PERIODOS = [
   { id: 'anio', etiqueta: 'Año' },
 ];
 
-export default function Ventas({ refreshKey }) {
+export default function Ventas({ refreshKey, onEditarVenta }) {
   const ahora = new Date();
   const hoy = todayLocal();
   const mesActual = hoy.slice(0, 7);
@@ -35,6 +37,7 @@ export default function Ventas({ refreshKey }) {
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
   const [ventaAbierta, setVentaAbierta] = useState(null);
+  const [ventaEditando, setVentaEditando] = useState(null);
   const [recarga, setRecarga] = useState(0);
 
   const valorActual = periodo === 'dia' ? hoy : periodo === 'mes' ? mesActual : anioActual;
@@ -80,7 +83,7 @@ export default function Ventas({ refreshKey }) {
   const totalPeriodo = datos?.totalPeriodo ?? 0;
   const cantidadVentas = datos?.cantidadVentas ?? 0;
   const unidades = datos?.unidades ?? 0;
-  const masVendidos = datos?.masVendidos ?? [];
+  const series = datos?.series ?? [];
   const ticketPromedio = cantidadVentas > 0 ? totalPeriodo / cantidadVentas : 0;
   const nombreDetalle = periodo === 'dia' ? 'Detalle del día' : periodo === 'mes' ? 'Detalle del mes' : 'Detalle del año';
 
@@ -89,7 +92,7 @@ export default function Ventas({ refreshKey }) {
       <div className="page-head">
         <div>
           <h1>Ventas</h1>
-          <p>Consultá las ventas por día, mes o año, el total ganado y los productos más vendidos.</p>
+          <p>Consultá las ventas por día, mes o año, el total ganado y cómo se distribuyeron.</p>
         </div>
 
         <div className="ventas-controls">
@@ -199,7 +202,7 @@ export default function Ventas({ refreshKey }) {
         </div>
       )}
 
-      <GraficoVentas productos={masVendidos} etiqueta={etiqueta} cargando={cargando} />
+      <GraficoVentas series={series} periodo={periodo} etiqueta={etiqueta} cargando={cargando} />
 
       <div className="card ventas-card">
         <div className="ventas-card-head">
@@ -273,6 +276,15 @@ export default function Ventas({ refreshKey }) {
                           ))}
                         </tbody>
                       </table>
+                      <div className="venta-detalle-acciones">
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setVentaEditando(venta)}
+                        >
+                          <IconEdit size={15} /> Editar venta
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -281,6 +293,14 @@ export default function Ventas({ refreshKey }) {
           </div>
         )}
       </div>
+
+      {ventaEditando && (
+        <EditarVentaModal
+          venta={ventaEditando}
+          onGuardar={onEditarVenta}
+          onCerrar={() => setVentaEditando(null)}
+        />
+      )}
 
       <div className="backup-note">
         <IconDownload size={16} />

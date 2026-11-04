@@ -126,6 +126,14 @@ export function IconImage(props) {
   );
 }
 
+export function IconBarcode(props) {
+  return (
+    <Svg {...props}>
+      <path d="M4 5v14M7 5v14M10 5v9M13 5v14M16 5v9M19 5v14" />
+    </Svg>
+  );
+}
+
 export function IconTag(props) {
   return (
     <Svg {...props}>

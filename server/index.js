@@ -101,8 +101,7 @@ function parseMonto(raw, etiqueta) {
   return round2(monto);
 }
 
-function resumenVentasDia(dia) {
-  const filas = db.prepare('SELECT metodo_pago, total FROM ventas WHERE dia = ?').all(dia);
+function resumenVentasFilas(filas) {
   const metodos = new Map();
   let totalVentas = 0;
 
@@ -129,6 +128,22 @@ function resumenVentasDia(dia) {
   };
 }
 
+function resumenVentasDia(dia) {
+  const filas = db.prepare('SELECT metodo_pago, total FROM ventas WHERE dia = ?').all(dia);
+  return resumenVentasFilas(filas);
+}
+
+function resumenVentasRango(desde, hasta) {
+  const filas = hasta
+    ? db
+        .prepare('SELECT metodo_pago, total FROM ventas WHERE fecha >= ? AND fecha <= ?')
+        .all(desde, hasta)
+    : db
+        .prepare('SELECT metodo_pago, total FROM ventas WHERE fecha >= ?')
+        .all(desde);
+  return resumenVentasFilas(filas);
+}
+
 function cajaAObjeto(fila) {
   if (!fila) return null;
   return {
@@ -141,28 +156,70 @@ function cajaAObjeto(fila) {
   };
 }
 
-function estadoCaja(dia = localDay()) {
-  const caja = cajaAObjeto(db.prepare('SELECT * FROM cajas WHERE dia = ?').get(dia));
-  const resumen = resumenVentasDia(dia);
-  const efectivoEsperado = caja ? round2(caja.montoApertura + resumen.totalEfectivo) : null;
-  const diferencia =
-    caja && caja.montoCierre !== null ? round2(caja.montoCierre - efectivoEsperado) : null;
-  const anterior = db
-    .prepare(
-      'SELECT monto_cierre FROM cajas WHERE dia < ? AND monto_cierre IS NOT NULL ORDER BY dia DESC LIMIT 1'
-    )
-    .get(dia);
-
+function cajaConResumen(fila) {
+  const caja = cajaAObjeto(fila);
+  if (!caja) return null;
+  const resumen = resumenVentasRango(caja.fechaApertura, caja.fechaCierre);
+  const efectivoEsperado = round2(caja.montoApertura + resumen.totalEfectivo);
   return {
-    dia,
-    caja,
-    abierta: Boolean(caja && caja.montoCierre === null),
-    cerrada: Boolean(caja && caja.montoCierre !== null),
-    sugerenciaApertura: round2(anterior?.monto_cierre ?? 0),
+    ...caja,
     resumen: {
       ...resumen,
       efectivoEsperado,
-      diferencia,
+      diferencia:
+        caja.montoCierre === null ? null : round2(caja.montoCierre - efectivoEsperado),
+    },
+  };
+}
+
+function cajaAbiertaHoy(dia = localDay()) {
+  return db
+    .prepare(
+      `SELECT * FROM cajas
+       WHERE dia = ? AND monto_cierre IS NULL
+       ORDER BY fecha_apertura DESC, id DESC
+       LIMIT 1`
+    )
+    .get(dia);
+}
+
+function estadoCaja(dia = localDay()) {
+  const filas = db
+    .prepare('SELECT * FROM cajas WHERE dia = ? ORDER BY fecha_apertura ASC, id ASC')
+    .all(dia);
+  const sesiones = filas.map(cajaConResumen);
+  const abierta = sesiones.find((sesion) => sesion.montoCierre === null) ?? null;
+  const cerradasHoy = sesiones.filter((sesion) => sesion.montoCierre !== null);
+  const ultimaCerrada = cerradasHoy.length ? cerradasHoy[cerradasHoy.length - 1] : null;
+  const ultimoCierreGlobal = db
+    .prepare(
+      `SELECT monto_cierre, fecha_cierre FROM cajas
+       WHERE monto_cierre IS NOT NULL
+       ORDER BY fecha_cierre DESC, id DESC
+       LIMIT 1`
+    )
+    .get();
+  const resumenDia = resumenVentasDia(dia);
+  const resumen = abierta
+    ? abierta.resumen
+    : ultimaCerrada
+      ? ultimaCerrada.resumen
+      : { ...resumenDia, efectivoEsperado: null, diferencia: null };
+
+  return {
+    dia,
+    caja: abierta,
+    abierta: Boolean(abierta),
+    cerrada: !abierta && cerradasHoy.length > 0,
+    sesiones,
+    ultimaCerrada,
+    ultimoCierre: ultimoCierreGlobal?.fecha_cierre ?? null,
+    sugerenciaApertura: round2(ultimoCierreGlobal?.monto_cierre ?? 0),
+    resumen,
+    resumenDia: {
+      ...resumenDia,
+      cantidadSesiones: sesiones.length,
+      sesionesCerradas: cerradasHoy.length,
     },
   };
 }
@@ -203,6 +260,20 @@ app.get('/api/productos/stock-bajo', (_req, res) => {
   res.json({ limite: STOCK_BAJO_LIMITE, productos });
 });
 
+app.get('/api/productos/buscar-codigo', (req, res, next) => {
+  try {
+    const codigo = String(req.query.codigo ?? '').trim();
+    if (!codigo) throw httpError(400, 'Ingresá un código de barras');
+    const producto = db
+      .prepare('SELECT * FROM productos WHERE codigo_barras = ? COLLATE NOCASE')
+      .get(codigo);
+    if (!producto) throw httpError(404, 'No existe un producto con ese código de barras');
+    res.json(producto);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/caja', (_req, res) => {
   res.json(estadoCaja());
 });
@@ -210,14 +281,8 @@ app.get('/api/caja', (_req, res) => {
 app.post('/api/caja/abrir', (req, res, next) => {
   try {
     const dia = localDay();
-    const existente = db.prepare('SELECT * FROM cajas WHERE dia = ?').get(dia);
-    if (existente) {
-      throw httpError(
-        409,
-        existente.monto_cierre === null
-          ? 'La caja de hoy ya está abierta'
-          : 'La caja de hoy ya fue cerrada'
-      );
+    if (cajaAbiertaHoy(dia)) {
+      throw httpError(409, 'La caja de hoy ya está abierta');
     }
 
     const montoApertura = parseMonto(req.body?.montoApertura, 'monto de apertura');
@@ -234,9 +299,8 @@ app.post('/api/caja/abrir', (req, res, next) => {
 app.post('/api/caja/cerrar', (req, res, next) => {
   try {
     const dia = localDay();
-    const caja = db.prepare('SELECT * FROM cajas WHERE dia = ?').get(dia);
-    if (!caja) throw httpError(409, 'Primero abrí la caja del día');
-    if (caja.monto_cierre !== null) throw httpError(409, 'La caja de hoy ya está cerrada');
+    const caja = cajaAbiertaHoy(dia);
+    if (!caja) throw httpError(409, 'No hay una caja abierta para cerrar');
 
     const montoCierre = parseMonto(req.body?.montoCierre, 'monto de cierre');
     db.prepare('UPDATE cajas SET monto_cierre = ?, fecha_cierre = ? WHERE id = ?').run(
@@ -465,6 +529,64 @@ function parsePeriodoVentas(query) {
   return { periodo, valor, where: 'dia LIKE ?', params: [`${valor}-%`] };
 }
 
+function crearSerieVacia(etiquetas) {
+  return etiquetas.map((etiqueta) => ({ etiqueta, total: 0, ventas: 0, unidades: 0 }));
+}
+
+function construirSeries(periodo, valor, ventas) {
+  let series;
+  let indice;
+
+  if (periodo === 'dia') {
+    series = crearSerieVacia(Array.from({ length: 24 }, (_, hora) => String(hora).padStart(2, '0')));
+    indice = (venta) => new Date(venta.fecha).getHours();
+  } else if (periodo === 'mes') {
+    const [anio, mes] = valor.split('-').map(Number);
+    const dias = new Date(anio, mes, 0).getDate();
+    series = crearSerieVacia(
+      Array.from({ length: dias }, (_, dia) => String(dia + 1).padStart(2, '0'))
+    );
+    indice = (venta) => Number(venta.dia.slice(8, 10)) - 1;
+  } else {
+    const meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    series = crearSerieVacia(meses);
+    indice = (venta) => Number(venta.dia.slice(5, 7)) - 1;
+  }
+
+  for (const venta of ventas) {
+    const posicion = indice(venta);
+    const item = series[posicion];
+    if (!item) continue;
+    item.total = round2(item.total + venta.total);
+    item.ventas += 1;
+    item.unidades += venta.items.reduce((suma, producto) => suma + producto.cantidad, 0);
+  }
+
+  return series;
+}
+
+function parseVenta(metodoPagoRaw, items) {
+  const metodoPago = String(metodoPagoRaw ?? '').trim();
+  if (!metodoPago) throw httpError(400, 'Debe elegir un método de pago');
+  if (metodoPago.length > 40) throw httpError(400, 'Método de pago inválido');
+  if (!Array.isArray(items) || items.length === 0) throw httpError(400, 'El carrito está vacío');
+
+  const agrupados = new Map();
+  for (const item of items) {
+    const productoId = Number(item?.productoId);
+    const cantidad = Number(item?.cantidad);
+    if (!Number.isInteger(productoId) || productoId <= 0) {
+      throw httpError(400, 'Producto inválido en el carrito');
+    }
+    if (!Number.isInteger(cantidad) || cantidad <= 0) {
+      throw httpError(400, 'Cantidad inválida en el carrito');
+    }
+    agrupados.set(productoId, (agrupados.get(productoId) ?? 0) + cantidad);
+  }
+
+  return { metodoPago, agrupados };
+}
+
 app.get('/api/ventas', (req, res, next) => {
   try {
     const { periodo, valor, where, params } = parsePeriodoVentas(req.query);
@@ -514,68 +636,59 @@ app.get('/api/ventas', (req, res, next) => {
       cantidadVentas: ventas.length,
       unidades,
       masVendidos,
+      series: construirSeries(periodo, valor, ventas),
     });
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/ventas', (req, res, next) => {
-  const metodoPago = String(req.body?.metodoPago ?? '').trim();
-  const items = req.body?.items;
+function construirResumenConStock(agrupados) {
+  const buscarProducto = db.prepare(
+    'SELECT id, nombre, categoria, precio, cantidad, codigo_barras FROM productos WHERE id = ?'
+  );
+  const actualizarStock = db.prepare('UPDATE productos SET cantidad = cantidad - ? WHERE id = ?');
+  const resumen = [];
+  let total = 0;
 
-  try {
-    if (!metodoPago) throw httpError(400, 'Debe elegir un método de pago');
-    if (metodoPago.length > 40) throw httpError(400, 'Método de pago inválido');
-    if (!Array.isArray(items) || items.length === 0) throw httpError(400, 'El carrito está vacío');
-
-    const dia = localDay();
-    const cajaDia = db.prepare('SELECT monto_cierre FROM cajas WHERE dia = ?').get(dia);
-    if (!cajaDia) throw httpError(409, 'Primero abrí la caja del día para registrar ventas');
-    if (cajaDia.monto_cierre !== null) {
-      throw httpError(409, 'La caja de hoy ya está cerrada. No se pueden registrar más ventas');
+  for (const [productoId, cantidad] of agrupados) {
+    const producto = buscarProducto.get(productoId);
+    if (!producto) throw httpError(404, 'Uno de los productos del carrito ya no existe');
+    if (producto.cantidad < cantidad) {
+      throw httpError(
+        409,
+        `Stock insuficiente para "${producto.nombre}" (disponible: ${producto.cantidad})`
+      );
     }
 
-    const agrupados = new Map();
-    for (const item of items) {
-      const productoId = Number(item?.productoId);
-      const cantidad = Number(item?.cantidad);
-      if (!Number.isInteger(productoId) || productoId <= 0) throw httpError(400, 'Producto inválido en el carrito');
-      if (!Number.isInteger(cantidad) || cantidad <= 0) throw httpError(400, 'Cantidad inválida en el carrito');
-      agrupados.set(productoId, (agrupados.get(productoId) ?? 0) + cantidad);
+    const subtotal = round2(producto.precio * cantidad);
+    total += subtotal;
+    resumen.push({
+      productoId: producto.id,
+      nombre: producto.nombre,
+      categoria: producto.categoria,
+      codigo_barras: producto.codigo_barras,
+      precio: producto.precio,
+      cantidad,
+      subtotal,
+    });
+    actualizarStock.run(cantidad, productoId);
+  }
+
+  return { resumen, total: round2(total) };
+}
+
+app.post('/api/ventas', (req, res, next) => {
+  try {
+    const { metodoPago, agrupados } = parseVenta(req.body?.metodoPago, req.body?.items);
+    const dia = localDay();
+    if (!cajaAbiertaHoy(dia)) {
+      throw httpError(409, 'Primero abrí la caja del día para registrar ventas');
     }
 
     db.exec('BEGIN IMMEDIATE');
     try {
-      const buscarProducto = db.prepare(
-        'SELECT id, nombre, categoria, precio, cantidad, codigo_barras FROM productos WHERE id = ?'
-      );
-      const actualizarStock = db.prepare('UPDATE productos SET cantidad = cantidad - ? WHERE id = ?');
-      const resumen = [];
-      let total = 0;
-
-      for (const [productoId, cantidad] of agrupados) {
-        const producto = buscarProducto.get(productoId);
-        if (!producto) throw httpError(404, 'Uno de los productos del carrito ya no existe');
-        if (producto.cantidad < cantidad) {
-          throw httpError(409, `Stock insuficiente para "${producto.nombre}" (disponible: ${producto.cantidad})`);
-        }
-
-        const subtotal = round2(producto.precio * cantidad);
-        total += subtotal;
-        resumen.push({
-          productoId: producto.id,
-          nombre: producto.nombre,
-          categoria: producto.categoria,
-          codigo_barras: producto.codigo_barras,
-          precio: producto.precio,
-          cantidad,
-          subtotal,
-        });
-        actualizarStock.run(cantidad, productoId);
-      }
-
-      total = round2(total);
+      const { resumen, total } = construirResumenConStock(agrupados);
       const fecha = new Date();
       const info = db
         .prepare(
@@ -590,6 +703,48 @@ app.post('/api/ventas', (req, res, next) => {
         id: Number(info.lastInsertRowid),
         fecha: fecha.toISOString(),
         dia,
+        metodoPago,
+        total,
+        items: resumen,
+      });
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/ventas/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
+
+    const existente = db.prepare('SELECT * FROM ventas WHERE id = ?').get(id);
+    if (!existente) throw httpError(404, 'Venta no encontrada');
+
+    const { metodoPago, agrupados } = parseVenta(req.body?.metodoPago, req.body?.items);
+    const itemsAnteriores = JSON.parse(existente.resumen);
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const restaurarStock = db.prepare('UPDATE productos SET cantidad = cantidad + ? WHERE id = ?');
+      for (const item of itemsAnteriores) {
+        restaurarStock.run(item.cantidad, item.productoId);
+      }
+
+      const { resumen, total } = construirResumenConStock(agrupados);
+      db.prepare(
+        'UPDATE ventas SET metodo_pago = ?, total = ?, resumen = ? WHERE id = ?'
+      ).run(metodoPago, total, JSON.stringify(resumen), id);
+
+      db.exec('COMMIT');
+
+      res.json({
+        id,
+        fecha: existente.fecha,
+        dia: existente.dia,
         metodoPago,
         total,
         items: resumen,

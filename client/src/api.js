@@ -30,6 +30,10 @@ export const api = {
   getStockBajo() {
     return request('/productos/stock-bajo');
   },
+  buscarProductoCodigo(codigo) {
+    const params = new URLSearchParams({ codigo });
+    return request(`/productos/buscar-codigo?${params.toString()}`);
+  },
   crearProducto(producto) {
     return request('/productos', { method: 'POST', body: JSON.stringify(producto) });
   },
@@ -58,6 +62,12 @@ export const api = {
   crearVenta(metodoPago, items) {
     return request('/ventas', {
       method: 'POST',
+      body: JSON.stringify({ metodoPago, items }),
+    });
+  },
+  actualizarVenta(id, metodoPago, items) {
+    return request(`/ventas/${id}`, {
+      method: 'PUT',
       body: JSON.stringify({ metodoPago, items }),
     });
   },

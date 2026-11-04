@@ -43,7 +43,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS cajas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    dia TEXT NOT NULL UNIQUE,
+    dia TEXT NOT NULL,
     monto_apertura REAL NOT NULL CHECK (monto_apertura >= 0),
     monto_cierre REAL CHECK (monto_cierre IS NULL OR monto_cierre >= 0),
     fecha_apertura TEXT NOT NULL,
@@ -54,7 +54,41 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_productos_nombre ON productos (nombre);
 `);
 
+const cajasSql = db
+  .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cajas'")
+  .get()?.sql;
+
+if (/dia\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(cajasSql ?? '')) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`
+      ALTER TABLE cajas RENAME TO cajas_legacy;
+      CREATE TABLE cajas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        dia TEXT NOT NULL,
+        monto_apertura REAL NOT NULL CHECK (monto_apertura >= 0),
+        monto_cierre REAL CHECK (monto_cierre IS NULL OR monto_cierre >= 0),
+        fecha_apertura TEXT NOT NULL,
+        fecha_cierre TEXT
+      );
+      INSERT INTO cajas (id, dia, monto_apertura, monto_cierre, fecha_apertura, fecha_cierre)
+      SELECT id, dia, monto_apertura, monto_cierre, fecha_apertura, fecha_cierre
+      FROM cajas_legacy;
+      DROP TABLE cajas_legacy;
+    `);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_cajas_dia ON cajas (dia);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_cajas_abierta
+  ON cajas (dia)
+  WHERE monto_cierre IS NULL;
+
   INSERT OR IGNORE INTO categorias (nombre)
   SELECT DISTINCT TRIM(categoria)
   FROM productos

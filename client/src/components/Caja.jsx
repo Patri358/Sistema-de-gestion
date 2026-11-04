@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import Modal from './Modal.jsx';
 import { IconAlert, IconCheck, IconReceipt, IconWallet } from './Icons.jsx';
-import { formatARS, formatFechaLarga, formatHora, todayLocal } from '../utils.js';
+import { formatARS, formatFechaCorta, formatFechaLarga, formatHora, todayLocal } from '../utils.js';
 
 function ListaMetodos({ resumen }) {
   if (resumen.porMetodo.length === 0) {
-    return <p className="caja-vacio">Todavía no hay ventas registradas hoy.</p>;
+    return <p className="caja-vacio">No hay ventas registradas en esta sesión.</p>;
   }
 
   return (
@@ -32,8 +32,8 @@ function Fila({ etiqueta, valor, destacado = false, tono = '' }) {
   );
 }
 
-function DetalleCierre({ datos }) {
-  const { caja, resumen } = datos;
+function DetalleCierre({ sesion }) {
+  const resumen = sesion.resumen;
   const diferencia = resumen.diferencia ?? 0;
   const tono = diferencia < 0 ? 'negativo' : diferencia > 0 ? 'positivo' : '';
 
@@ -43,16 +43,17 @@ function DetalleCierre({ datos }) {
         <span>Total generado</span>
         <strong>{formatARS(resumen.totalVentas)}</strong>
         <small>
-          {resumen.cantidadVentas} {resumen.cantidadVentas === 1 ? 'venta' : 'ventas'} en el día
+          {resumen.cantidadVentas} {resumen.cantidadVentas === 1 ? 'venta' : 'ventas'} ·{' '}
+          {formatHora(sesion.fechaApertura)} a {formatHora(sesion.fechaCierre)}
         </small>
       </div>
 
       <div className="caja-resumen-rows">
-        <Fila etiqueta="Apertura" valor={formatARS(caja.montoApertura)} />
+        <Fila etiqueta="Apertura" valor={formatARS(sesion.montoApertura)} />
         <Fila etiqueta="Ventas en efectivo" valor={formatARS(resumen.totalEfectivo)} />
         <Fila etiqueta="Otros medios de pago" valor={formatARS(resumen.totalOtros)} />
         <Fila etiqueta="Efectivo esperado" valor={formatARS(resumen.efectivoEsperado)} />
-        <Fila etiqueta="Efectivo contado" valor={formatARS(caja.montoCierre)} destacado />
+        <Fila etiqueta="Efectivo contado" valor={formatARS(sesion.montoCierre)} destacado />
         <Fila
           etiqueta="Diferencia"
           valor={`${diferencia > 0 ? '+' : ''}${formatARS(diferencia)}`}
@@ -67,7 +68,7 @@ function DetalleCierre({ datos }) {
       </div>
 
       <p className="caja-cierre-hint">
-        El efectivo contado quedará como sugerencia para la apertura del próximo día.
+        El efectivo contado quedará como sugerencia para la próxima apertura de caja.
       </p>
     </>
   );
@@ -86,7 +87,7 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
         <div className="page-head">
           <div>
             <h1>Caja</h1>
-            <p>Apertura, cierre y resumen diario de ventas.</p>
+            <p>Aperturas, cierres y resumen de ventas del día.</p>
           </div>
         </div>
         <div className="card caja-skeleton" />
@@ -94,8 +95,9 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
     );
   }
 
-  const caja = datos?.caja ?? null;
-  const resumen = datos?.resumen ?? {
+  const sesionAbierta = datos?.caja ?? null;
+  const sesionVisible = sesionAbierta ?? datos?.ultimaCerrada ?? null;
+  const resumen = sesionVisible?.resumen ?? {
     cantidadVentas: 0,
     totalVentas: 0,
     totalEfectivo: 0,
@@ -104,15 +106,23 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
     efectivoEsperado: null,
     diferencia: null,
   };
-  const estado = !caja ? 'pendiente' : caja.montoCierre === null ? 'abierta' : 'cerrada';
+  const estado = sesionAbierta ? 'abierta' : (datos?.sesiones?.length ?? 0) > 0 ? 'cerrada' : 'pendiente';
   const diferencia = resumen.diferencia;
-  const tonoDiferencia = diferencia === null ? '' : diferencia < 0 ? 'negativo' : diferencia > 0 ? 'positivo' : '';
+  const tonoDiferencia =
+    diferencia === null ? '' : diferencia < 0 ? 'negativo' : diferencia > 0 ? 'positivo' : '';
   const diferenciaPreview =
     mostrarCierre && montoContado !== '' && Number.isFinite(Number(montoContado))
       ? Number(montoContado) - (resumen.efectivoEsperado ?? 0)
       : null;
   const tonoPreview =
-    diferenciaPreview === null ? '' : diferenciaPreview < 0 ? 'negativo' : diferenciaPreview > 0 ? 'positivo' : '';
+    diferenciaPreview === null
+      ? ''
+      : diferenciaPreview < 0
+        ? 'negativo'
+        : diferenciaPreview > 0
+          ? 'positivo'
+          : '';
+  const ultimoCierre = datos?.ultimoCierre;
 
   function abrirCierre() {
     setMontoContado(String(resumen.efectivoEsperado ?? 0));
@@ -134,7 +144,12 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
     try {
       const respuesta = await onCerrarCaja(numero);
       setMostrarCierre(false);
-      setResumenCierre(respuesta);
+      const sesiones = respuesta.sesiones ?? [];
+      setResumenCierre(
+        respuesta.ultimaCerrada ??
+          [...sesiones].reverse().find((sesion) => sesion.montoCierre !== null) ??
+          null
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -147,7 +162,14 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
       <div className="page-head">
         <div>
           <h1>Caja</h1>
-          <p>Apertura, cierre y resumen diario de ventas.</p>
+          <p>
+            Abrí y cerrá la caja todas las veces que necesites durante el día.
+            {ultimoCierre && (
+              <span className="caja-ultimo-cierre">
+                Último cierre: {formatFechaCorta(ultimoCierre.slice(0, 10))} · {formatHora(ultimoCierre)}
+              </span>
+            )}
+          </p>
         </div>
         <span className="count-pill capitalize">
           {formatFechaLarga(datos?.dia ?? todayLocal())}
@@ -174,9 +196,9 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
           </strong>
           <p>
             {estado === 'abierta'
-              ? `Abierta a las ${formatHora(caja.fechaApertura)} con ${formatARS(caja.montoApertura)}.`
+              ? `Abierta a las ${formatHora(sesionAbierta.fechaApertura)} con ${formatARS(sesionAbierta.montoApertura)}.`
               : estado === 'cerrada'
-                ? `Cerrada a las ${formatHora(caja.fechaCierre)}. Efectivo contado: ${formatARS(caja.montoCierre)}.`
+                ? `Última sesión cerrada a las ${formatHora(datos.ultimaCerrada?.fechaCierre ?? ultimoCierre)} con ${formatARS(datos.ultimaCerrada?.montoCierre ?? 0)}. Podés abrir una nueva.`
                 : 'Abrila para habilitar el registro de ventas del día.'}
           </p>
         </div>
@@ -186,13 +208,18 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
           </button>
         )}
         {estado === 'cerrada' && (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setResumenCierre(datos)}
-          >
-            Ver resumen
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setResumenCierre(datos.ultimaCerrada)}
+            >
+              Ver resumen
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={onSolicitarApertura}>
+              Abrir nueva caja
+            </button>
+          </>
         )}
         {estado === 'pendiente' && (
           <button type="button" className="btn btn-primary btn-sm" onClick={onSolicitarApertura}>
@@ -201,11 +228,11 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
         )}
       </section>
 
-      {caja && (
+      {sesionVisible && (
         <div className="caja-stats">
           <article className="caja-stat">
             <span>Apertura</span>
-            <strong>{formatARS(caja.montoApertura)}</strong>
+            <strong>{formatARS(sesionVisible.montoApertura)}</strong>
             <small>Efectivo inicial</small>
           </article>
           <article className="caja-stat">
@@ -239,16 +266,18 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
 
         <section className="card caja-card">
           <div className="caja-card-head">
-            <h2>Resumen del día</h2>
+            <h2>Resumen de la sesión</h2>
           </div>
           <div className="caja-resumen-rows">
             <Fila etiqueta="Total generado" valor={formatARS(resumen.totalVentas)} destacado />
             <Fila etiqueta="Efectivo" valor={formatARS(resumen.totalEfectivo)} />
             <Fila etiqueta="Otros medios" valor={formatARS(resumen.totalOtros)} />
-            {caja && <Fila etiqueta="Efectivo esperado" valor={formatARS(resumen.efectivoEsperado)} />}
-            {caja && caja.montoCierre !== null && (
+            {sesionVisible && (
+              <Fila etiqueta="Efectivo esperado" valor={formatARS(resumen.efectivoEsperado)} />
+            )}
+            {sesionVisible && sesionVisible.montoCierre !== null && (
               <>
-                <Fila etiqueta="Efectivo contado" valor={formatARS(caja.montoCierre)} />
+                <Fila etiqueta="Efectivo contado" valor={formatARS(sesionVisible.montoCierre)} />
                 <Fila
                   etiqueta="Diferencia"
                   valor={`${diferencia > 0 ? '+' : ''}${formatARS(diferencia)}`}
@@ -269,6 +298,43 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
         </section>
       </div>
 
+      {(datos?.sesiones?.length ?? 0) > 0 && (
+        <section className="card caja-card caja-sesiones-card">
+          <div className="caja-card-head">
+            <h2>Sesiones de hoy</h2>
+            <span>{datos.sesiones.length} en total</span>
+          </div>
+          <div className="caja-sesiones">
+            {datos.sesiones.map((sesion, indice) => (
+              <div className="caja-sesion-row" key={sesion.id}>
+                <span className="caja-sesion-num">#{indice + 1}</span>
+                <div className="caja-sesion-info">
+                  <strong>
+                    {formatHora(sesion.fechaApertura)} a{' '}
+                    {sesion.fechaCierre ? formatHora(sesion.fechaCierre) : 'ahora'}
+                  </strong>
+                  <small>
+                    {sesion.montoCierre === null
+                      ? `Abierta · ${sesion.resumen.cantidadVentas} ventas`
+                      : `Cerrada · contado ${formatARS(sesion.montoCierre)}`}
+                  </small>
+                </div>
+                <strong className="caja-sesion-total">
+                  {formatARS(sesion.resumen.totalVentas)}
+                </strong>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setResumenCierre(sesion)}
+                >
+                  Ver
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {mostrarCierre && (
         <Modal
           titulo="Cerrar caja"
@@ -278,13 +344,13 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
         >
           <form className="formulario" onSubmit={confirmarCierre}>
             <p className="confirm-text">
-              Contá el efectivo de la caja y registrá el total con el que cerrás el día.
+              Contá el efectivo de la caja y registrá el total con el que cerrás esta sesión.
             </p>
 
             <div className="caja-esperado-box">
               <span>Efectivo esperado</span>
               <strong>{formatARS(resumen.efectivoEsperado)}</strong>
-              <small>Apertura + ventas en efectivo</small>
+              <small>Apertura + ventas en efectivo de esta sesión</small>
             </div>
 
             <div className="field">
@@ -344,7 +410,7 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
           size="lg"
           onCerrar={() => setResumenCierre(null)}
         >
-          <DetalleCierre datos={resumenCierre} />
+          <DetalleCierre sesion={resumenCierre} />
           <div className="modal-actions">
             <button
               type="button"

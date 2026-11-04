@@ -1,69 +1,71 @@
 import { IconChart } from './Icons.jsx';
 import { formatARS } from '../utils.js';
 
-export default function GraficoVentas({ productos, etiqueta, cargando }) {
-  const visibles = productos.slice(0, 8);
-  const maximo = visibles[0]?.cantidad || 1;
-  const totalUnidades = productos.reduce((suma, producto) => suma + producto.cantidad, 0);
+const TITULOS = {
+  dia: 'Ventas por hora',
+  mes: 'Ventas por día',
+  anio: 'Ventas por mes',
+};
+
+export default function GraficoVentas({ series = [], periodo = 'dia', etiqueta, cargando }) {
+  const maximo = Math.max(...series.map((punto) => punto.total), 0);
+  const total = series.reduce((suma, punto) => suma + punto.total, 0);
+  const unidades = series.reduce((suma, punto) => suma + punto.unidades, 0);
+  const hayDatos = series.some((punto) => punto.ventas > 0);
 
   return (
     <section className="card chart-card">
       <div className="chart-head">
         <div>
           <h2>
-            <IconChart size={18} /> Productos más vendidos
+            <IconChart size={18} /> {TITULOS[periodo] ?? 'Ventas del período'}
           </h2>
-          <p>Según unidades vendidas · {etiqueta}</p>
+          <p>Total facturado {etiqueta}</p>
         </div>
-        {!cargando && productos.length > 0 && (
-          <span className="count-pill">{totalUnidades} u. vendidas</span>
+        {!cargando && hayDatos && (
+          <span className="count-pill">
+            {formatARS(total)} · {unidades} u.
+          </span>
         )}
       </div>
 
       {cargando ? (
-        <div className="chart-bars">
-          {Array.from({ length: 4 }).map((_, indice) => (
-            <div key={indice} className="skeleton chart-skeleton" />
-          ))}
-        </div>
-      ) : visibles.length === 0 ? (
+        <div className="time-chart-skeleton" />
+      ) : !hayDatos ? (
         <div className="empty-state inline chart-empty">
           <span className="empty-icon">
             <IconChart size={26} />
           </span>
           <h3>Sin ventas en este período</h3>
-          <p>Cuando registres ventas, acá vas a ver los productos más vendidos.</p>
+          <p>Cuando registres ventas, acá vas a ver cómo se distribuyeron.</p>
         </div>
       ) : (
-        <>
-          <div className="chart-bars">
-            {visibles.map((producto, indice) => {
-              const porcentaje = Math.max(4, Math.round((producto.cantidad / maximo) * 100));
+        <div className="time-chart">
+          <div className="time-bars" style={{ minWidth: `${series.length * 34}px` }}>
+            {series.map((punto) => {
+              const alto =
+                punto.total > 0 && maximo > 0 ? Math.max(3, (punto.total / maximo) * 100) : 0;
               return (
-                <div className="chart-row" key={producto.productoId ?? producto.nombre}>
-                  <span className={`chart-rank ${indice === 0 ? 'top' : ''}`}>{indice + 1}</span>
-                  <div className="chart-label">
-                    <strong title={producto.nombre}>{producto.nombre}</strong>
-                    <small>{producto.categoria}</small>
+                <div
+                  className={`time-bar ${punto.total > 0 ? 'con-ventas' : ''}`}
+                  key={punto.etiqueta}
+                  title={`${punto.etiqueta}: ${formatARS(punto.total)} · ${punto.ventas} ventas`}
+                >
+                  {series.length <= 16 && (
+                    <span className="time-bar-value">
+                      {punto.total > 0 ? formatARS(punto.total) : ''}
+                    </span>
+                  )}
+                  <div className="time-bar-track">
+                    <div className="time-bar-fill" style={{ height: `${alto}%` }} />
                   </div>
-                  <div className="chart-bar-area">
-                    <div className="chart-track">
-                      <div className="chart-fill" style={{ width: `${porcentaje}%` }} />
-                    </div>
-                    <span className="chart-units">{producto.cantidad} u.</span>
-                  </div>
-                  <span className="chart-money">{formatARS(producto.total)}</span>
+                  <span className="time-bar-label">{punto.etiqueta}</span>
+                  <span className="time-bar-count">{punto.ventas > 0 ? punto.ventas : ''}</span>
                 </div>
               );
             })}
           </div>
-
-          {productos.length > visibles.length && (
-            <p className="chart-foot">
-              Mostrando los 8 productos con más unidades vendidas de {productos.length} vendidos.
-            </p>
-          )}
-        </>
+        </div>
       )}
     </section>
   );
