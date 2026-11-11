@@ -71,6 +71,12 @@ export const api = {
       body: JSON.stringify({ metodoPago, items, ...opciones }),
     });
   },
+  getMovimientosStock(productoId) {
+    const params = new URLSearchParams();
+    if (productoId) params.set('productoId', productoId);
+    const qs = params.toString();
+    return request(`/movimientos-stock${qs ? `?${qs}` : ''}`);
+  },
   getCaja() {
     return request('/caja');
   },
@@ -78,6 +84,12 @@ export const api = {
     return request('/caja/abrir', {
       method: 'POST',
       body: JSON.stringify({ montoApertura }),
+    });
+  },
+  retirarCaja(monto, motivo) {
+    return request('/caja/retirar', {
+      method: 'POST',
+      body: JSON.stringify({ monto, motivo }),
     });
   },
   cerrarCaja(montoCierre) {

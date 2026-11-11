@@ -13,10 +13,16 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
     imagen: producto.imagen || null,
     activo: Number(producto.activo ?? 1) !== 0,
   });
+  const [motivoStock, setMotivoStock] = useState('');
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [procesandoImagen, setProcesandoImagen] = useState(false);
   const inputImagen = useRef(null);
+  const cantidadNumero = Number(form.cantidad);
+  const stockCambia =
+    form.cantidad !== '' &&
+    Number.isInteger(cantidadNumero) &&
+    cantidadNumero !== Number(producto.cantidad);
 
   function setCampo(campo, valor) {
     setForm((actual) => ({ ...actual, [campo]: valor }));
@@ -77,6 +83,10 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
       setError('La cantidad debe ser un número entero mayor o igual a 0');
       return;
     }
+    if (stockCambia && !motivoStock.trim()) {
+      setError('Indicá el motivo del movimiento de stock');
+      return;
+    }
 
     setGuardando(true);
     try {
@@ -88,6 +98,7 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
         codigo_barras: form.codigo_barras.trim(),
         imagen: form.imagen,
         activo: form.activo,
+        motivoStock: stockCambia ? motivoStock.trim() : '',
       });
       onCerrar();
     } catch (err) {
@@ -179,6 +190,23 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
             </button>
           ))}
         </div>
+
+        {stockCambia && (
+          <div className="field stock-motivo-field">
+            <label htmlFor="editar-motivo-stock">Motivo del movimiento de stock</label>
+            <input
+              id="editar-motivo-stock"
+              type="text"
+              maxLength={200}
+              value={motivoStock}
+              placeholder="Ej: reposición de proveedor, rotura, vencimiento"
+              onChange={(e) => setMotivoStock(e.target.value)}
+            />
+            <small className="field-hint">
+              Queda registrado en Movimientos con la fecha y hora del cambio.
+            </small>
+          </div>
+        )}
 
         <div className="field">
           <label htmlFor="editar-codigo">Código de barra</label>

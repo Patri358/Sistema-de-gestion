@@ -58,8 +58,32 @@ db.exec(`
     fecha_cierre TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS movimientos_stock (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    producto_id INTEGER NOT NULL,
+    producto_nombre TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    motivo TEXT NOT NULL,
+    cantidad_anterior INTEGER NOT NULL,
+    cantidad_nueva INTEGER NOT NULL,
+    delta INTEGER NOT NULL,
+    fecha TEXT NOT NULL,
+    dia TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS retiros_caja (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    caja_id INTEGER NOT NULL,
+    monto REAL NOT NULL CHECK (monto > 0),
+    motivo TEXT NOT NULL,
+    fecha TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_ventas_dia ON ventas (dia);
   CREATE INDEX IF NOT EXISTS idx_productos_nombre ON productos (nombre);
+  CREATE INDEX IF NOT EXISTS idx_movimientos_stock_producto
+    ON movimientos_stock (producto_id, fecha);
+  CREATE INDEX IF NOT EXISTS idx_retiros_caja_caja ON retiros_caja (caja_id, fecha);
 `);
 
 function asegurarColumna(tabla, columna, definicion) {

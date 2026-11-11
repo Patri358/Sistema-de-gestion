@@ -7,11 +7,13 @@ import Categorias from './components/Categorias.jsx';
 import StockBajo from './components/StockBajo.jsx';
 import Caja from './components/Caja.jsx';
 import AbrirCajaModal from './components/AbrirCajaModal.jsx';
+import MovimientosStock from './components/MovimientosStock.jsx';
 import {
   IconAlert,
   IconBox,
   IconCheck,
   IconDownload,
+  IconHistory,
   IconReceipt,
   IconStore,
   IconTag,
@@ -23,6 +25,7 @@ import { formatARS, todayLocal } from './utils.js';
 const TABS = [
   { id: 'inventario', etiqueta: 'Inventario', Icono: IconBox },
   { id: 'stock-bajo', etiqueta: 'Stock bajo', Icono: IconAlert },
+  { id: 'movimientos', etiqueta: 'Movimientos', Icono: IconHistory },
   { id: 'ventas', etiqueta: 'Ventas', Icono: IconReceipt },
   { id: 'caja', etiqueta: 'Caja', Icono: IconWallet },
   { id: 'categorias', etiqueta: 'Categorías', Icono: IconTag },
@@ -294,6 +297,15 @@ export default function App() {
     return datos;
   }
 
+  async function retirarCaja(monto, motivo) {
+    const datos = await api.retirarCaja(monto, motivo);
+    cajaSolicitud.current += 1;
+    setCaja(datos);
+    setCargandoCaja(false);
+    notify(`Retiro de ${formatARS(monto)} registrado`);
+    return datos;
+  }
+
   async function cerrarCaja(montoCierre) {
     const datos = await api.cerrarCaja(montoCierre);
     cajaSolicitud.current += 1;
@@ -439,6 +451,8 @@ export default function App() {
           />
         )}
 
+        {tab === 'movimientos' && <MovimientosStock refreshKey={refreshKey} />}
+
         {tab === 'ventas' && <Ventas refreshKey={refreshKey} onEditarVenta={editarVenta} />}
 
         {tab === 'caja' && (
@@ -446,6 +460,7 @@ export default function App() {
             datos={caja}
             cargando={cargandoCaja}
             onSolicitarApertura={() => setMostrarApertura(true)}
+            onRetirarCaja={retirarCaja}
             onCerrarCaja={cerrarCaja}
           />
         )}

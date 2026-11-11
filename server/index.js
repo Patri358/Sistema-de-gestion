@@ -114,6 +114,55 @@ function parseMonto(raw, etiqueta) {
   return round2(monto);
 }
 
+function parseMotivo(raw, etiqueta = 'motivo') {
+  const motivo = String(raw ?? '').trim();
+  if (!motivo) throw httpError(400, `Indicá el ${etiqueta}`);
+  if (motivo.length > 200) throw httpError(400, `El ${etiqueta} no puede superar los 200 caracteres`);
+  return motivo;
+}
+
+function registrarMovimientoStock({
+  productoId,
+  productoNombre,
+  tipo,
+  motivo,
+  cantidadAnterior,
+  cantidadNueva,
+  fecha = new Date(),
+}) {
+  const delta = Number(cantidadNueva) - Number(cantidadAnterior);
+  if (!Number.isFinite(delta) || delta === 0) return;
+  const iso = fecha.toISOString();
+  db.prepare(
+    `INSERT INTO movimientos_stock
+       (producto_id, producto_nombre, tipo, motivo, cantidad_anterior, cantidad_nueva, delta, fecha, dia)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    productoId,
+    productoNombre,
+    tipo,
+    motivo,
+    cantidadAnterior,
+    cantidadNueva,
+    delta,
+    iso,
+    localDay(fecha)
+  );
+}
+
+function retirosDeCaja(cajaId) {
+  return db
+    .prepare('SELECT * FROM retiros_caja WHERE caja_id = ? ORDER BY fecha ASC, id ASC')
+    .all(cajaId)
+    .map((fila) => ({
+      id: fila.id,
+      monto: fila.monto,
+      motivo: fila.motivo,
+      fecha: fila.fecha,
+      dia: localDay(new Date(fila.fecha)),
+    }));
+}
+
 function resumenVentasFilas(filas) {
   const metodos = new Map();
   let totalVentas = 0;
@@ -173,11 +222,15 @@ function cajaConResumen(fila) {
   const caja = cajaAObjeto(fila);
   if (!caja) return null;
   const resumen = resumenVentasRango(caja.fechaApertura, caja.fechaCierre);
-  const efectivoEsperado = round2(caja.montoApertura + resumen.totalEfectivo);
+  const retiros = retirosDeCaja(caja.id);
+  const totalRetiros = round2(retiros.reduce((suma, retiro) => suma + retiro.monto, 0));
+  const efectivoEsperado = round2(caja.montoApertura + resumen.totalEfectivo - totalRetiros);
   return {
     ...caja,
+    retiros,
     resumen: {
       ...resumen,
+      totalRetiros,
       efectivoEsperado,
       diferencia:
         caja.montoCierre === null ? null : round2(caja.montoCierre - efectivoEsperado),
@@ -287,6 +340,53 @@ app.get('/api/productos/buscar-codigo', (req, res, next) => {
   }
 });
 
+app.get('/api/movimientos-stock', (req, res, next) => {
+  try {
+    const productoIdRaw = String(req.query.productoId ?? '').trim();
+    let productoId = null;
+    if (productoIdRaw) {
+      productoId = Number(productoIdRaw);
+      if (!Number.isInteger(productoId) || productoId <= 0) {
+        throw httpError(400, 'El producto seleccionado es inválido');
+      }
+    }
+
+    const filas = productoId
+      ? db
+          .prepare(
+            `SELECT * FROM movimientos_stock
+             WHERE producto_id = ?
+             ORDER BY fecha DESC, id DESC
+             LIMIT 500`
+          )
+          .all(productoId)
+      : db
+          .prepare(
+            `SELECT * FROM movimientos_stock
+             ORDER BY fecha DESC, id DESC
+             LIMIT 500`
+          )
+          .all();
+
+    const movimientos = filas.map((fila) => ({
+      id: fila.id,
+      productoId: fila.producto_id,
+      productoNombre: fila.producto_nombre,
+      tipo: fila.tipo,
+      motivo: fila.motivo,
+      cantidadAnterior: fila.cantidad_anterior,
+      cantidadNueva: fila.cantidad_nueva,
+      delta: fila.delta,
+      fecha: fila.fecha,
+      dia: fila.dia,
+    }));
+
+    res.json({ productoId, movimientos, total: movimientos.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/caja', (_req, res) => {
   res.json(estadoCaja());
 });
@@ -302,6 +402,37 @@ app.post('/api/caja/abrir', (req, res, next) => {
     db.prepare(
       'INSERT INTO cajas (dia, monto_apertura, monto_cierre, fecha_apertura, fecha_cierre) VALUES (?, ?, NULL, ?, NULL)'
     ).run(dia, montoApertura, new Date().toISOString());
+
+    res.status(201).json(estadoCaja(dia));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/caja/retirar', (req, res, next) => {
+  try {
+    const dia = localDay();
+    const caja = cajaAbiertaHoy(dia);
+    if (!caja) throw httpError(409, 'No hay una caja abierta para registrar el retiro');
+
+    const monto = parseMonto(req.body?.monto, 'monto del retiro');
+    if (monto <= 0) throw httpError(400, 'El monto del retiro debe ser mayor a 0');
+    const motivo = parseMotivo(req.body?.motivo, 'motivo del retiro');
+
+    const disponible = cajaConResumen(caja).resumen.efectivoEsperado;
+    if (monto > disponible) {
+      throw httpError(
+        409,
+        `El retiro supera el efectivo disponible en la caja (${disponible.toFixed(2)})`
+      );
+    }
+
+    db.prepare('INSERT INTO retiros_caja (caja_id, monto, motivo, fecha) VALUES (?, ?, ?, ?)').run(
+      caja.id,
+      monto,
+      motivo,
+      new Date().toISOString()
+    );
 
     res.status(201).json(estadoCaja(dia));
   } catch (error) {
@@ -454,6 +585,14 @@ app.post('/api/productos', (req, res, next) => {
     const creado = db
       .prepare('SELECT * FROM productos WHERE id = ?')
       .get(Number(info.lastInsertRowid));
+    registrarMovimientoStock({
+      productoId: creado.id,
+      productoNombre: creado.nombre,
+      tipo: 'alta',
+      motivo: 'Alta de producto',
+      cantidadAnterior: 0,
+      cantidadNueva: creado.cantidad,
+    });
     res.status(201).json(creado);
   } catch (error) {
     next(error);
@@ -469,6 +608,12 @@ app.put('/api/productos/:id', (req, res, next) => {
     if (!existente) throw httpError(404, 'Producto no encontrado');
 
     const producto = parseProducto(req.body, existente.activo);
+    const cambioStock = producto.cantidad !== existente.cantidad;
+    const motivoStock = cambioStock
+      ? parseMotivo(req.body?.motivoStock, 'motivo del movimiento de stock')
+      : null;
+
+    db.exec('BEGIN IMMEDIATE');
     try {
       db.prepare(
         `UPDATE productos
@@ -484,7 +629,21 @@ app.put('/api/productos/:id', (req, res, next) => {
         producto.activo,
         id
       );
+
+      if (cambioStock) {
+        registrarMovimientoStock({
+          productoId: id,
+          productoNombre: producto.nombre,
+          tipo: 'ajuste',
+          motivo: motivoStock,
+          cantidadAnterior: existente.cantidad,
+          cantidadNueva: producto.cantidad,
+        });
+      }
+
+      db.exec('COMMIT');
     } catch (error) {
+      db.exec('ROLLBACK');
       if (String(error.message).includes('UNIQUE constraint failed')) {
         throw httpError(409, 'Ya existe otro producto con ese código de barra');
       }
@@ -720,6 +879,7 @@ function construirResumenConStock(agrupados, permitirInactivos = new Set()) {
   );
   const actualizarStock = db.prepare('UPDATE productos SET cantidad = cantidad - ? WHERE id = ?');
   const resumen = [];
+  const movimientos = [];
   let total = 0;
 
   for (const [productoId, cantidad] of agrupados) {
@@ -746,10 +906,16 @@ function construirResumenConStock(agrupados, permitirInactivos = new Set()) {
       cantidad,
       subtotal,
     });
+    movimientos.push({
+      productoId: producto.id,
+      productoNombre: producto.nombre,
+      cantidadAnterior: producto.cantidad,
+      cantidadNueva: producto.cantidad - cantidad,
+    });
     actualizarStock.run(cantidad, productoId);
   }
 
-  return { resumen, total: round2(total) };
+  return { resumen, total: round2(total), movimientos };
 }
 
 app.post('/api/ventas', (req, res, next) => {
@@ -762,7 +928,7 @@ app.post('/api/ventas', (req, res, next) => {
 
     db.exec('BEGIN IMMEDIATE');
     try {
-      const { resumen, total: subtotal } = construirResumenConStock(agrupados);
+      const { resumen, total: subtotal, movimientos } = construirResumenConStock(agrupados);
       const { descuentoTipo, descuentoValor, descuento } = parseDescuento(
         req.body?.descuentoTipo,
         req.body?.descuentoValor,
@@ -789,6 +955,16 @@ app.post('/api/ventas', (req, res, next) => {
           vuelto,
           JSON.stringify(resumen)
         );
+
+      const ventaId = Number(info.lastInsertRowid);
+      for (const movimiento of movimientos) {
+        registrarMovimientoStock({
+          ...movimiento,
+          tipo: 'venta',
+          motivo: `Venta #${ventaId}`,
+          fecha,
+        });
+      }
 
       db.exec('COMMIT');
 
@@ -834,6 +1010,17 @@ app.put('/api/ventas/:id', (req, res, next) => {
 
     db.exec('BEGIN IMMEDIATE');
     try {
+      const buscarStock = db.prepare('SELECT id, nombre, cantidad FROM productos WHERE id = ?');
+      const idsAfectados = new Set([
+        ...itemsAnteriores.map((item) => item.productoId),
+        ...agrupados.keys(),
+      ]);
+      const stockAntes = new Map();
+      for (const productoId of idsAfectados) {
+        const actual = buscarStock.get(productoId);
+        if (actual) stockAntes.set(productoId, actual.cantidad);
+      }
+
       const restaurarStock = db.prepare('UPDATE productos SET cantidad = cantidad + ? WHERE id = ?');
       for (const item of itemsAnteriores) {
         restaurarStock.run(item.cantidad, item.productoId);
@@ -867,6 +1054,21 @@ app.put('/api/ventas/:id', (req, res, next) => {
         JSON.stringify(resumen),
         id
       );
+
+      const fechaMovimiento = new Date();
+      for (const [productoId, cantidadAnterior] of stockAntes) {
+        const actual = buscarStock.get(productoId);
+        if (!actual) continue;
+        registrarMovimientoStock({
+          productoId,
+          productoNombre: actual.nombre,
+          tipo: 'edicion_venta',
+          motivo: `Edición de venta #${id}`,
+          cantidadAnterior,
+          cantidadNueva: actual.cantidad,
+          fecha: fechaMovimiento,
+        });
+      }
 
       db.exec('COMMIT');
 

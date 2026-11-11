@@ -23,6 +23,28 @@ function ListaMetodos({ resumen }) {
   );
 }
 
+function ListaRetiros({ retiros = [], vacio = 'No hay retiros de efectivo en esta sesión.' }) {
+  if (retiros.length === 0) {
+    return <p className="caja-vacio">{vacio}</p>;
+  }
+
+  return (
+    <div className="caja-retiros-lista">
+      {retiros.map((retiro) => (
+        <div className="caja-retiro-row" key={retiro.id}>
+          <div className="caja-retiro-info">
+            <strong>{retiro.motivo}</strong>
+            <small>
+              {formatFechaCorta(retiro.dia)} · {formatHora(retiro.fecha)}
+            </small>
+          </div>
+          <strong className="caja-retiro-monto">-{formatARS(retiro.monto)}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Fila({ etiqueta, valor, destacado = false, tono = '' }) {
   return (
     <div className={`caja-resumen-row ${destacado ? 'destacado' : ''}`}>
@@ -52,6 +74,11 @@ function DetalleCierre({ sesion }) {
         <Fila etiqueta="Apertura" valor={formatARS(sesion.montoApertura)} />
         <Fila etiqueta="Ventas en efectivo" valor={formatARS(resumen.totalEfectivo)} />
         <Fila etiqueta="Otros medios de pago" valor={formatARS(resumen.totalOtros)} />
+        <Fila
+          etiqueta="Retiros de efectivo"
+          valor={`-${formatARS(resumen.totalRetiros ?? 0)}`}
+          tono={resumen.totalRetiros > 0 ? 'negativo' : ''}
+        />
         <Fila etiqueta="Efectivo esperado" valor={formatARS(resumen.efectivoEsperado)} />
         <Fila etiqueta="Efectivo contado" valor={formatARS(sesion.montoCierre)} destacado />
         <Fila
@@ -67,6 +94,11 @@ function DetalleCierre({ sesion }) {
         <ListaMetodos resumen={resumen} />
       </div>
 
+      <div className="caja-cierre-metodos">
+        <h3>Retiros de efectivo</h3>
+        <ListaRetiros retiros={sesion.retiros} />
+      </div>
+
       <p className="caja-cierre-hint">
         El efectivo contado quedará como sugerencia para la próxima apertura de caja.
       </p>
@@ -74,11 +106,16 @@ function DetalleCierre({ sesion }) {
   );
 }
 
-export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaja }) {
+export default function Caja({ datos, cargando, onSolicitarApertura, onRetirarCaja, onCerrarCaja }) {
   const [mostrarCierre, setMostrarCierre] = useState(false);
+  const [mostrarRetiro, setMostrarRetiro] = useState(false);
   const [montoContado, setMontoContado] = useState('');
+  const [montoRetiro, setMontoRetiro] = useState('');
+  const [motivoRetiro, setMotivoRetiro] = useState('');
   const [error, setError] = useState('');
+  const [errorRetiro, setErrorRetiro] = useState('');
   const [cerrando, setCerrando] = useState(false);
+  const [retirando, setRetirando] = useState(false);
   const [resumenCierre, setResumenCierre] = useState(null);
 
   if (cargando) {
@@ -102,10 +139,12 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
     totalVentas: 0,
     totalEfectivo: 0,
     totalOtros: 0,
+    totalRetiros: 0,
     porMetodo: [],
     efectivoEsperado: null,
     diferencia: null,
   };
+  const retiros = sesionVisible?.retiros ?? [];
   const estado = sesionAbierta ? 'abierta' : (datos?.sesiones?.length ?? 0) > 0 ? 'cerrada' : 'pendiente';
   const diferencia = resumen.diferencia;
   const tonoDiferencia =
@@ -128,6 +167,38 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
     setMontoContado(String(resumen.efectivoEsperado ?? 0));
     setError('');
     setMostrarCierre(true);
+  }
+
+  function abrirRetiro() {
+    setMontoRetiro('');
+    setMotivoRetiro('');
+    setErrorRetiro('');
+    setMostrarRetiro(true);
+  }
+
+  async function confirmarRetiro(event) {
+    event.preventDefault();
+    setErrorRetiro('');
+
+    const numero = Number(montoRetiro);
+    if (montoRetiro === '' || !Number.isFinite(numero) || numero <= 0) {
+      setErrorRetiro('Ingresá un monto mayor a 0');
+      return;
+    }
+    if (!motivoRetiro.trim()) {
+      setErrorRetiro('Indicá el motivo del retiro');
+      return;
+    }
+
+    setRetirando(true);
+    try {
+      await onRetirarCaja(numero, motivoRetiro.trim());
+      setMostrarRetiro(false);
+    } catch (err) {
+      setErrorRetiro(err.message);
+    } finally {
+      setRetirando(false);
+    }
   }
 
   async function confirmarCierre(event) {
@@ -202,30 +273,37 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
                 : 'Abrila para habilitar el registro de ventas del día.'}
           </p>
         </div>
-        {estado === 'abierta' && (
-          <button type="button" className="btn btn-danger btn-sm" onClick={abrirCierre}>
-            Cerrar caja
-          </button>
-        )}
-        {estado === 'cerrada' && (
-          <>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setResumenCierre(datos.ultimaCerrada)}
-            >
-              Ver resumen
-            </button>
+        <div className="caja-banner-actions">
+          {estado === 'abierta' && (
+            <>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={abrirRetiro}>
+                Retirar dinero
+              </button>
+              <button type="button" className="btn btn-danger btn-sm" onClick={abrirCierre}>
+                Cerrar caja
+              </button>
+            </>
+          )}
+          {estado === 'cerrada' && (
+            <>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setResumenCierre(datos.ultimaCerrada)}
+              >
+                Ver resumen
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={onSolicitarApertura}>
+                Abrir nueva caja
+              </button>
+            </>
+          )}
+          {estado === 'pendiente' && (
             <button type="button" className="btn btn-primary btn-sm" onClick={onSolicitarApertura}>
-              Abrir nueva caja
+              Abrir caja
             </button>
-          </>
-        )}
-        {estado === 'pendiente' && (
-          <button type="button" className="btn btn-primary btn-sm" onClick={onSolicitarApertura}>
-            Abrir caja
-          </button>
-        )}
+          )}
+        </div>
       </section>
 
       {sesionVisible && (
@@ -245,10 +323,15 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
             <strong>{formatARS(resumen.totalOtros)}</strong>
             <small>Débito, crédito y más</small>
           </article>
+          <article className="caja-stat">
+            <span>Retiros</span>
+            <strong>{formatARS(resumen.totalRetiros ?? 0)}</strong>
+            <small>Efectivo retirado</small>
+          </article>
           <article className="caja-stat destacado">
             <span>Efectivo esperado</span>
             <strong>{formatARS(resumen.efectivoEsperado)}</strong>
-            <small>Apertura + ventas en efectivo</small>
+            <small>Apertura + ventas - retiros</small>
           </article>
         </div>
       )}
@@ -272,6 +355,11 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
             <Fila etiqueta="Total generado" valor={formatARS(resumen.totalVentas)} destacado />
             <Fila etiqueta="Efectivo" valor={formatARS(resumen.totalEfectivo)} />
             <Fila etiqueta="Otros medios" valor={formatARS(resumen.totalOtros)} />
+            <Fila
+              etiqueta="Retiros"
+              valor={`-${formatARS(resumen.totalRetiros ?? 0)}`}
+              tono={resumen.totalRetiros > 0 ? 'negativo' : ''}
+            />
             {sesionVisible && (
               <Fila etiqueta="Efectivo esperado" valor={formatARS(resumen.efectivoEsperado)} />
             )}
@@ -297,6 +385,27 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
           )}
         </section>
       </div>
+
+      {sesionVisible && (
+        <section className="card caja-card caja-retiros-card">
+          <div className="caja-card-head">
+            <div>
+              <h2>Retiros de efectivo</h2>
+              <p className="caja-card-sub">Movimientos de dinero fuera de la caja</p>
+            </div>
+            <span>
+              {retiros.length} {retiros.length === 1 ? 'retiro' : 'retiros'}
+            </span>
+          </div>
+          <ListaRetiros retiros={retiros} />
+          {retiros.length > 0 && (
+            <div className="caja-retiros-total">
+              <span>Total retirado</span>
+              <strong>{formatARS(resumen.totalRetiros ?? 0)}</strong>
+            </div>
+          )}
+        </section>
+      )}
 
       {(datos?.sesiones?.length ?? 0) > 0 && (
         <section className="card caja-card caja-sesiones-card">
@@ -335,6 +444,78 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
         </section>
       )}
 
+      {mostrarRetiro && (
+        <Modal
+          titulo="Retirar dinero"
+          subtitulo={formatFechaLarga(datos?.dia ?? todayLocal())}
+          icono={<IconWallet size={18} />}
+          onCerrar={retirando ? () => {} : () => setMostrarRetiro(false)}
+        >
+          <form className="formulario" onSubmit={confirmarRetiro}>
+            <p className="confirm-text">
+              Registrá el efectivo que retirás de la caja. Va a quedar guardado con la fecha y hora
+              para el cierre de la sesión.
+            </p>
+
+            <div className="caja-esperado-box">
+              <span>Efectivo disponible</span>
+              <strong>{formatARS(resumen.efectivoEsperado)}</strong>
+              <small>Apertura + ventas en efectivo - retiros</small>
+            </div>
+
+            <div className="form-row">
+              <div className="field">
+                <label htmlFor="monto-retiro">Monto a retirar</label>
+                <input
+                  id="monto-retiro"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={montoRetiro}
+                  onChange={(e) => setMontoRetiro(e.target.value)}
+                  autoFocus
+                  disabled={retirando}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="motivo-retiro">Motivo</label>
+                <input
+                  id="motivo-retiro"
+                  type="text"
+                  maxLength={200}
+                  value={motivoRetiro}
+                  placeholder="Ej: pago a proveedor, cambio de fondo"
+                  onChange={(e) => setMotivoRetiro(e.target.value)}
+                  disabled={retirando}
+                />
+              </div>
+            </div>
+
+            {errorRetiro && (
+              <div className="alert alert-error" role="alert">
+                <IconAlert size={18} />
+                <span>{errorRetiro}</span>
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setMostrarRetiro(false)}
+                disabled={retirando}
+              >
+                Cancelar
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={retirando}>
+                {retirando ? 'Registrando...' : 'Registrar retiro'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
       {mostrarCierre && (
         <Modal
           titulo="Cerrar caja"
@@ -350,7 +531,15 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onCerrarCaj
             <div className="caja-esperado-box">
               <span>Efectivo esperado</span>
               <strong>{formatARS(resumen.efectivoEsperado)}</strong>
-              <small>Apertura + ventas en efectivo de esta sesión</small>
+              <small>Apertura + ventas en efectivo - retiros de esta sesión</small>
+            </div>
+
+            <div className="caja-cierre-retiros">
+              <h3>Movimientos de efectivo retirado</h3>
+              <ListaRetiros
+                retiros={retiros}
+                vacio="No se registraron retiros en esta sesión."
+              />
             </div>
 
             <div className="field">

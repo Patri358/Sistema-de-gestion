@@ -3199,6 +3199,234 @@ select:focus {
   color: #64748b;
 }
 
+.caja-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.caja-banner-actions .btn {
+  margin-left: 0;
+}
+
+.caja-stats {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.caja-card-sub {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.caja-retiros-card {
+  margin-top: 18px;
+}
+
+.caja-retiros-lista {
+  display: flex;
+  flex-direction: column;
+}
+
+.caja-retiro-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.caja-retiro-row:last-child {
+  border-bottom: 0;
+}
+
+.caja-retiro-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.caja-retiro-info strong {
+  font-size: 0.84rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.caja-retiro-info small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.caja-retiro-monto {
+  color: var(--red);
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.caja-retiros-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.caja-retiros-total strong {
+  color: var(--red);
+  font-variant-numeric: tabular-nums;
+}
+
+.caja-cierre-retiros h3 {
+  margin: 0 0 4px;
+  font-size: 0.84rem;
+}
+
+.movimientos-controls {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.movimientos-controls .field {
+  min-width: 220px;
+  margin-bottom: 0;
+}
+
+.movimientos-controls select {
+  padding: 8px 10px;
+  font-size: 0.82rem;
+}
+
+.movimientos-card {
+  padding: 18px;
+}
+
+.movimientos-card-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.movimientos-card-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.movimientos-card-head small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.movimientos-lista {
+  display: flex;
+  flex-direction: column;
+}
+
+.movimiento-row {
+  display: grid;
+  grid-template-columns: 130px minmax(160px, 1fr) minmax(180px, 1.5fr) 110px;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.movimiento-row:last-child {
+  border-bottom: 0;
+}
+
+.movimiento-row-head {
+  padding: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.movimiento-fecha,
+.movimiento-producto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.movimiento-fecha strong,
+.movimiento-producto strong {
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.movimiento-fecha small,
+.movimiento-producto small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.movimiento-motivo {
+  font-size: 0.8rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.movimiento-cantidad {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.movimiento-cantidad strong {
+  font-size: 0.9rem;
+}
+
+.movimiento-cantidad small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.movimiento-cantidad.ingreso strong {
+  color: #15803d;
+}
+
+.movimiento-cantidad.egreso strong {
+  color: #b91c1c;
+}
+
+.movimiento-cantidad-head {
+  text-align: right;
+}
+
+.skeleton-movimiento {
+  min-height: 52px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #eef2f9 25%, #f8fafc 37%, #eef2f9 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s infinite;
+  border-bottom: 0;
+}
+
 @media (max-width: 1080px) {
   .inventario-layout {
     grid-template-columns: 1fr;
@@ -3287,5 +3515,56 @@ select:focus {
 
   .caja-banner.cerrada {
     align-items: stretch;
+  }
+
+  .caja-banner {
+    flex-wrap: wrap;
+  }
+
+  .caja-banner-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .caja-banner-actions .btn {
+    flex: 1;
+  }
+
+  .movimiento-row {
+    grid-template-columns: minmax(0, 1fr) 90px;
+    grid-template-areas:
+      'fecha cantidad'
+      'producto producto'
+      'motivo motivo';
+    gap: 4px 12px;
+    padding: 12px 0;
+  }
+
+  .movimiento-row-head {
+    display: none;
+  }
+
+  .movimiento-fecha {
+    grid-area: fecha;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .movimiento-producto {
+    grid-area: producto;
+  }
+
+  .movimiento-motivo {
+    grid-area: motivo;
+  }
+
+  .movimiento-cantidad {
+    grid-area: cantidad;
+  }
+
+  .movimientos-controls,
+  .movimientos-controls .field {
+    width: 100%;
   }
 }
