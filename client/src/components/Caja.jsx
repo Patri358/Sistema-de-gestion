@@ -14,7 +14,7 @@ function ListaMetodos({ resumen }) {
         <div className="caja-metodo-row" key={metodo.metodoPago}>
           <span className="caja-metodo-nombre">{metodo.metodoPago}</span>
           <span className="caja-metodo-cantidad">
-            {metodo.cantidad} {metodo.cantidad === 1 ? 'venta' : 'ventas'}
+            {metodo.cantidad} {metodo.cantidad === 1 ? 'venta' : 'ventias'}
           </span>
           <strong>{formatARS(metodo.total)}</strong>
         </div>
@@ -65,8 +65,10 @@ function DetalleCierre({ sesion }) {
         <span>Total generado</span>
         <strong>{formatARS(resumen.totalVentas)}</strong>
         <small>
-          {resumen.cantidadVentas} {resumen.cantidadVentas === 1 ? 'venta' : 'ventas'} ·{' '}
-          {formatHora(sesion.fechaApertura)} a {formatHora(sesion.fechaCierre)}
+          {resumen.cantidadVentas} {resumen.cantidadVentas === 1 ? 'venta' : 'ventas'}
+          {resumen.cantidadCobros > 0 &&
+            ` · ${resumen.cantidadCobros} ${resumen.cantidadCobros === 1 ? 'cobro' : 'cobros'}`}{' '}
+          · {formatHora(sesion.fechaApertura)} a {formatHora(sesion.fechaCierre)}
         </small>
       </div>
 
@@ -344,6 +346,8 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onRetirarCa
             <h2>Ventas por medio de pago</h2>
             <span>
               {resumen.cantidadVentas} {resumen.cantidadVentas === 1 ? 'venta' : 'ventas'}
+              {resumen.cantidadCobros > 0 &&
+                ` · ${resumen.cantidadCobros} ${resumen.cantidadCobros === 1 ? 'cobro' : 'cobros'}`}
             </span>
           </div>
           <ListaMetodos resumen={resumen} />

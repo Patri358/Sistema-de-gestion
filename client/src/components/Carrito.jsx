@@ -8,9 +8,18 @@ import {
   IconWallet,
   IconX,
 } from './Icons.jsx';
+import { api } from '../api.js';
 import { calcularDescuento, formatARS, iniciales } from '../utils.js';
 
-export const METODOS_PAGO = ['Efectivo', 'Débito', 'Crédito', 'Transferencia', 'Mercado Pago', 'QR'];
+export const METODOS_PAGO = [
+  'Efectivo',
+  'Débito',
+  'Crédito',
+  'Transferencia',
+  'Mercado Pago',
+  'QR',
+  'Fiado',
+];
 
 export default function Carrito({
   carrito,
@@ -28,6 +37,14 @@ export default function Carrito({
   const [descuentoValor, setDescuentoValor] = useState('');
   const [pagoCon, setPagoCon] = useState('');
   const [cliente, setCliente] = useState('');
+  const [clientesDisponibles, setClientesDisponibles] = useState([]);
+  const [clienteSeleccion, setClienteSeleccion] = useState('');
+  const [clienteNuevo, setClienteNuevo] = useState('');
+
+  const esFiado = metodoPago === 'Fiado';
+  const clienteValido =
+    !esFiado ||
+    (clienteSeleccion !== '' && (clienteSeleccion !== '__nuevo' || clienteNuevo.trim() !== ''));
 
   const subtotal = carrito.reduce((suma, item) => suma + item.producto.precio * item.cantidad, 0);
   const unidades = carrito.reduce((suma, item) => suma + item.cantidad, 0);
@@ -43,26 +60,46 @@ export default function Carrito({
       : null;
 
   useEffect(() => {
+    api
+      .getClientes()
+      .then((datos) => setClientesDisponibles(Array.isArray(datos) ? datos : []))
+      .catch(() => setClientesDisponibles([]));
+  }, []);
+
+  useEffect(() => {
     if (vacio) {
       setDescuentoValor('');
       setPagoCon('');
       setCliente('');
+      setClienteSeleccion('');
+      setClienteNuevo('');
     }
   }, [vacio]);
 
   function confirmar() {
-    if (!pagoSuficiente) return;
+    if (!pagoSuficiente || !clienteValido) return;
     const limiteDescuento = descuentoTipo === 'porcentaje' ? 100 : subtotal;
     const valorDescuento = Math.max(0, Math.min(Number(descuentoValor) || 0, limiteDescuento));
-    onConfirmar(metodoPago, {
+    const opciones = {
       descuentoTipo: descuento > 0 ? descuentoTipo : null,
       descuentoValor: descuento > 0 ? valorDescuento : 0,
       pagoCon:
         metodoPago === 'Efectivo' && pagoConCargado && Number.isFinite(pagoConNumero)
           ? pagoConNumero
           : null,
-      cliente: cliente.trim() || null,
-    });
+    };
+
+    if (esFiado) {
+      if (clienteSeleccion === '__nuevo') {
+        opciones.clienteNombre = clienteNuevo.trim();
+      } else {
+        opciones.clienteId = Number(clienteSeleccion);
+      }
+    } else {
+      opciones.cliente = cliente.trim() || null;
+    }
+
+    onConfirmar(metodoPago, opciones);
   }
 
   return (
@@ -212,19 +249,63 @@ export default function Carrito({
               <strong>{formatARS(total)}</strong>
             </div>
 
-            <div className="field">
-              <label htmlFor="cliente-venta">
-                Nombre del comprador <span className="optional-tag">opcional</span>
-              </label>
-              <input
-                id="cliente-venta"
-                type="text"
-                maxLength={120}
-                value={cliente}
-                placeholder="Ej: Juan Pérez"
-                onChange={(e) => setCliente(e.target.value)}
-              />
-            </div>
+            {esFiado ? (
+              <>
+                <div className="field">
+                  <label htmlFor="cliente-fiado">
+                    Cliente <span className="required-tag">obligatorio</span>
+                  </label>
+                  <select
+                    id="cliente-fiado"
+                    value={clienteSeleccion}
+                    onChange={(e) => setClienteSeleccion(e.target.value)}
+                  >
+                    <option value="">Elegí un cliente</option>
+                    {clientesDisponibles.map((clienteItem) => (
+                      <option key={clienteItem.id} value={clienteItem.id}>
+                        {clienteItem.nombre}
+                      </option>
+                    ))}
+                    <option value="__nuevo">+ Nuevo cliente</option>
+                  </select>
+                </div>
+
+                {clienteSeleccion === '__nuevo' && (
+                  <div className="field">
+                    <label htmlFor="cliente-nuevo">
+                      Nombre del nuevo cliente <span className="required-tag">obligatorio</span>
+                    </label>
+                    <input
+                      id="cliente-nuevo"
+                      type="text"
+                      maxLength={120}
+                      value={clienteNuevo}
+                      placeholder="Ej: Juan Pérez"
+                      onChange={(e) => setClienteNuevo(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                <p className="summary-hint">La venta quedará registrada como deuda del cliente.</p>
+              </>
+            ) : (
+              <div className="field">
+                <label htmlFor="cliente-venta">
+                  Nombre del cliente <span className="optional-tag">opcional</span>
+                </label>
+                <input
+                  id="cliente-venta"
+                  type="text"
+                  maxLength={120}
+                  value={cliente}
+                  placeholder="Ej: Juan Pérez"
+                  onChange={(e) => setCliente(e.target.value)}
+                />
+                <p className="summary-hint">
+                  Si cargás un nombre, la venta queda registrada en la sección Clientes.
+                </p>
+              </div>
+            )}
 
             <div className="field">
               <label htmlFor="metodo-pago">
@@ -291,7 +372,7 @@ export default function Carrito({
               type="button"
               className="btn btn-primary btn-block"
               onClick={confirmar}
-              disabled={comprando || !cajaAbierta || !pagoSuficiente}
+              disabled={comprando || !cajaAbierta || !pagoSuficiente || !clienteValido}
             >
               {!cajaAbierta
                 ? cajaEstado === 'cerrada'
@@ -301,10 +382,12 @@ export default function Carrito({
                   ? 'Registrando venta...'
                   : `Confirmar compra · ${formatARS(total)}`}
             </button>
-            <p className="summary-hint">
-              {cajaAbierta
-                ? 'El stock se descuenta automáticamente al confirmar.'
-                : 'La caja debe estar abierta para confirmar la venta.'}
+            <p className={`summary-hint ${esFiado && !clienteValido ? 'error' : ''}`}>
+              {!clienteValido
+                ? 'Elegí un cliente o cargá uno nuevo para vender a fiado.'
+                : cajaAbierta
+                  ? 'El stock se descuenta automáticamente al confirmar.'
+                  : 'La caja debe estar abierta para confirmar la venta.'}
             </p>
           </div>
         </>

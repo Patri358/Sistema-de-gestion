@@ -95,11 +95,31 @@ db.exec(`
     valor TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS clientes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS pagos_clientes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cliente_id INTEGER NOT NULL,
+    venta_id INTEGER NOT NULL,
+    monto REAL NOT NULL CHECK (monto > 0),
+    fecha TEXT NOT NULL,
+    dia TEXT NOT NULL,
+    usuario_id INTEGER,
+    caja_id INTEGER
+  );
+
   CREATE INDEX IF NOT EXISTS idx_ventas_dia ON ventas (dia);
   CREATE INDEX IF NOT EXISTS idx_productos_nombre ON productos (nombre);
   CREATE INDEX IF NOT EXISTS idx_movimientos_stock_producto
     ON movimientos_stock (producto_id, fecha);
   CREATE INDEX IF NOT EXISTS idx_retiros_caja_caja ON retiros_caja (caja_id, fecha);
+  CREATE INDEX IF NOT EXISTS idx_pagos_clientes_cliente ON pagos_clientes (cliente_id, fecha);
+  CREATE INDEX IF NOT EXISTS idx_pagos_clientes_venta ON pagos_clientes (venta_id);
+  CREATE INDEX IF NOT EXISTS idx_pagos_clientes_caja ON pagos_clientes (caja_id, fecha);
 `);
 
 function asegurarColumna(tabla, columna, definicion) {
@@ -112,6 +132,8 @@ function asegurarColumna(tabla, columna, definicion) {
 asegurarColumna('productos', 'activo', 'INTEGER NOT NULL DEFAULT 1');
 asegurarColumna('productos', 'stock_minimo', 'INTEGER NOT NULL DEFAULT 10');
 asegurarColumna('ventas', 'cliente', 'TEXT');
+asegurarColumna('ventas', 'cliente_id', 'INTEGER');
+asegurarColumna('ventas', 'fiado', 'INTEGER NOT NULL DEFAULT 0');
 asegurarColumna('ventas', 'descuento', 'REAL NOT NULL DEFAULT 0');
 asegurarColumna('ventas', 'descuento_tipo', 'TEXT');
 asegurarColumna('ventas', 'descuento_valor', 'REAL NOT NULL DEFAULT 0');

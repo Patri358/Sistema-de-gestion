@@ -37,6 +37,7 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
   const [cantidadAgregar, setCantidadAgregar] = useState('1');
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
+  const esFiado = metodoPago === 'Fiado';
 
   useEffect(() => {
     let cancelado = false;
@@ -136,6 +137,10 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
       setError('El monto pagado no alcanza a cubrir el total de la venta');
       return;
     }
+    if (esFiado && !cliente.trim()) {
+      setError('El nombre del cliente es obligatorio para vender a fiado');
+      return;
+    }
 
     const limiteDescuento = descuentoTipo === 'porcentaje' ? 100 : subtotal;
     const valorDescuento = Math.max(0, Math.min(Number(descuentoValor) || 0, limiteDescuento));
@@ -154,6 +159,7 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
               ? Number(pagoCon)
               : null,
           cliente: cliente.trim() || null,
+          clienteId: esFiado ? venta.clienteId ?? null : null,
         }
       );
       onCerrar();
@@ -345,7 +351,12 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
 
         <div className="field">
           <label htmlFor="editar-cliente-venta">
-            Nombre del comprador <span className="optional-tag">opcional</span>
+            Nombre del cliente{' '}
+            {esFiado ? (
+              <span className="required-tag">obligatorio</span>
+            ) : (
+              <span className="optional-tag">opcional</span>
+            )}
           </label>
           <input
             id="editar-cliente-venta"

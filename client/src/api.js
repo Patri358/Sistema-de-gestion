@@ -27,7 +27,13 @@ async function request(path, options = {}, conAuth = true) {
   const token = leerToken();
   if (conAuth && token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(BASE + path, { ...options, headers });
+  let res;
+  try {
+    res = await fetch(BASE + path, { ...options, headers });
+  } catch {
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('api-error'));
+    throw new Error('Failed to fetch');
+  }
 
   let data = null;
   try {
@@ -107,6 +113,18 @@ export const api = {
     const params = new URLSearchParams({ periodo, valor });
     return request(`/ventas?${params.toString()}`);
   },
+  getClientes() {
+    return request('/clientes');
+  },
+  getCliente(id) {
+    return request(`/clientes/${id}`);
+  },
+  pagarDeuda(clienteId, ventaId, monto) {
+    return request(`/clientes/${clienteId}/pagos`, {
+      method: 'POST',
+      body: JSON.stringify({ ventaId, monto }),
+    });
+  },
   crearVenta(metodoPago, items, opciones = {}) {
     return request('/ventas', {
       method: 'POST',
@@ -149,7 +167,13 @@ export const api = {
   async descargarBase() {
     const token = leerToken();
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    const res = await fetch(`${BASE}/exportar`, { headers });
+    let res;
+    try {
+      res = await fetch(`${BASE}/exportar`, { headers });
+    } catch {
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('api-error'));
+      throw new Error('Failed to fetch');
+    }
     if (res.status === 401 && typeof window !== 'undefined') {
       window.dispatchEvent(new Event('sesion-expirada'));
     }

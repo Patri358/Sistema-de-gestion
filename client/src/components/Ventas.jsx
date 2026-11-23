@@ -287,7 +287,7 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
                         <div className="venta-detalle-resumen">
                           {venta.cliente && (
                             <div className="summary-row">
-                              <span>Comprador</span>
+                              <span>Cliente</span>
                               <span>{venta.cliente}</span>
                             </div>
                           )}

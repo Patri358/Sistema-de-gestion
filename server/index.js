@@ -203,6 +203,180 @@ function parseCliente(raw) {
   return cliente;
 }
 
+function parseNombreCliente(raw) {
+  const nombre = String(raw ?? '').trim();
+  if (!nombre) {
+    throw httpError(400, 'El nombre del cliente es obligatorio para vender a fiado');
+  }
+  if (nombre.length > 120) {
+    throw httpError(400, 'El nombre del cliente no puede superar los 120 caracteres');
+  }
+  return nombre;
+}
+
+function clienteParaVenta(body) {
+  const clienteId = Number(body?.clienteId);
+  if (Number.isInteger(clienteId) && clienteId > 0) {
+    const cliente = db.prepare('SELECT id, nombre FROM clientes WHERE id = ?').get(clienteId);
+    if (!cliente) throw httpError(400, 'El cliente elegido no existe');
+    return cliente;
+  }
+
+  const nombre = parseNombreCliente(body?.clienteNombre ?? body?.cliente);
+  db.prepare('INSERT OR IGNORE INTO clientes (nombre) VALUES (?)').run(nombre);
+  return db.prepare('SELECT id, nombre FROM clientes WHERE nombre = ? COLLATE NOCASE').get(nombre);
+}
+
+function clienteOpcionalParaVenta(body) {
+  const clienteId = Number(body?.clienteId);
+  if (Number.isInteger(clienteId) && clienteId > 0) {
+    const cliente = db.prepare('SELECT id, nombre FROM clientes WHERE id = ?').get(clienteId);
+    if (!cliente) throw httpError(400, 'El cliente elegido no existe');
+    return cliente;
+  }
+
+  const nombre = String(body?.clienteNombre ?? body?.cliente ?? '').trim();
+  if (!nombre) return null;
+  if (nombre.length > 120) {
+    throw httpError(400, 'El nombre del cliente no puede superar los 120 caracteres');
+  }
+  db.prepare('INSERT OR IGNORE INTO clientes (nombre) VALUES (?)').run(nombre);
+  return db.prepare('SELECT id, nombre FROM clientes WHERE nombre = ? COLLATE NOCASE').get(nombre);
+}
+
+function pagosDeVenta(ventaId) {
+  return db
+    .prepare(
+      `SELECT p.id, p.monto, p.fecha, p.dia, p.usuario_id, u.nombre AS usuario_nombre
+       FROM pagos_clientes p
+       LEFT JOIN usuarios u ON u.id = p.usuario_id
+       WHERE p.venta_id = ?
+       ORDER BY p.fecha ASC, p.id ASC`
+    )
+    .all(ventaId)
+    .map((fila) => ({
+      id: fila.id,
+      monto: fila.monto,
+      fecha: fila.fecha,
+      dia: fila.dia,
+      usuario: nombreUsuarioCaja(fila.usuario_id, fila.usuario_nombre),
+    }));
+}
+
+function ventaConEstado(fila) {
+  const items = JSON.parse(fila.resumen);
+  const pagos = pagosDeVenta(fila.id);
+  const montoPagado = round2(pagos.reduce((suma, pago) => suma + pago.monto, 0));
+  const esFiado = Boolean(fila.fiado);
+  const saldo = esFiado ? round2(Math.max(0, fila.total - montoPagado)) : 0;
+  const clienteNombre =
+    fila.cliente ??
+    (fila.cliente_id
+      ? db.prepare('SELECT nombre FROM clientes WHERE id = ?').get(fila.cliente_id)?.nombre ?? null
+      : null);
+  return {
+    id: fila.id,
+    fecha: fila.fecha,
+    dia: fila.dia,
+    metodoPago: fila.metodo_pago,
+    cliente: clienteNombre,
+    clienteId: fila.cliente_id ?? null,
+    fiado: esFiado,
+    pagado: !esFiado || saldo === 0,
+    montoPagado,
+    saldo,
+    pagos,
+    subtotal: round2(items.reduce((suma, item) => suma + item.subtotal, 0)),
+    descuento: round2(fila.descuento ?? 0),
+    descuentoTipo: fila.descuento_tipo ?? null,
+    descuentoValor: round2(fila.descuento_valor ?? 0),
+    pagoCon: fila.pago_con ?? null,
+    vuelto: fila.vuelto ?? null,
+    total: fila.total,
+    items,
+  };
+}
+
+function clientesResumen() {
+  return db
+    .prepare(
+      `SELECT c.id, c.nombre, c.creado_en,
+              COALESCE(v.total_fiado, 0) AS total_fiado,
+              COALESCE(v.cantidad_compras, 0) AS cantidad_compras,
+              v.ultima_compra,
+              COALESCE(p.total_pagado, 0) AS total_pagado
+       FROM clientes c
+       LEFT JOIN (
+         SELECT cliente_id,
+                COUNT(*) AS cantidad_compras,
+                SUM(CASE WHEN COALESCE(fiado, 0) = 1 THEN total ELSE 0 END) AS total_fiado,
+                MAX(fecha) AS ultima_compra
+         FROM ventas
+         WHERE cliente_id IS NOT NULL
+         GROUP BY cliente_id
+       ) v ON v.cliente_id = c.id
+       LEFT JOIN (
+         SELECT cliente_id, SUM(monto) AS total_pagado
+         FROM pagos_clientes
+         GROUP BY cliente_id
+       ) p ON p.cliente_id = c.id
+       ORDER BY c.nombre COLLATE NOCASE ASC`
+    )
+    .all()
+    .map((fila) => ({
+      id: fila.id,
+      nombre: fila.nombre,
+      creadoEn: fila.creado_en,
+      cantidadCompras: fila.cantidad_compras,
+      ultimaCompra: fila.ultima_compra ?? null,
+      totalFiado: round2(fila.total_fiado),
+      totalPagado: round2(fila.total_pagado),
+      deuda: round2(Math.max(0, fila.total_fiado - fila.total_pagado)),
+    }));
+}
+
+function detalleCliente(clienteId) {
+  const cliente = db.prepare('SELECT id, nombre FROM clientes WHERE id = ?').get(clienteId);
+  if (!cliente) throw httpError(404, 'Cliente no encontrado');
+
+  const ventas = db
+    .prepare('SELECT * FROM ventas WHERE cliente_id = ? ORDER BY fecha DESC, id DESC')
+    .all(clienteId)
+    .map(ventaConEstado);
+  const pagos = db
+    .prepare(
+      `SELECT p.id, p.venta_id, p.monto, p.fecha, p.dia, p.usuario_id, u.nombre AS usuario_nombre,
+              v.total AS venta_total
+       FROM pagos_clientes p
+       LEFT JOIN usuarios u ON u.id = p.usuario_id
+       LEFT JOIN ventas v ON v.id = p.venta_id
+       WHERE p.cliente_id = ?
+       ORDER BY p.fecha DESC, p.id DESC`
+    )
+    .all(clienteId)
+    .map((fila) => ({
+      id: fila.id,
+      ventaId: fila.venta_id,
+      monto: fila.monto,
+      fecha: fila.fecha,
+      dia: fila.dia,
+      usuario: nombreUsuarioCaja(fila.usuario_id, fila.usuario_nombre),
+    }));
+
+  return {
+    id: cliente.id,
+    nombre: cliente.nombre,
+    ventas,
+    pagos,
+    totalCompras: round2(ventas.reduce((suma, venta) => suma + venta.total, 0)),
+    totalFiado: round2(
+      ventas.filter((venta) => venta.fiado).reduce((suma, venta) => suma + venta.total, 0)
+    ),
+    totalPagado: round2(pagos.reduce((suma, pago) => suma + pago.monto, 0)),
+    deuda: round2(ventas.reduce((suma, venta) => suma + venta.saldo, 0)),
+  };
+}
+
 function registrarMovimientoStock({
   productoId,
   productoNombre,
@@ -272,19 +446,61 @@ function resumenVentasFilas(filas) {
   };
 }
 
+function cobrosDeCaja(cajaId) {
+  return db
+    .prepare('SELECT monto FROM pagos_clientes WHERE caja_id = ?')
+    .all(cajaId)
+    .map((fila) => fila.monto);
+}
+
+function cobrosDelDia(dia) {
+  return db
+    .prepare('SELECT monto FROM pagos_clientes WHERE dia = ?')
+    .all(dia)
+    .map((fila) => fila.monto);
+}
+
+function agregarCobrosAResumen(resumen, cobros) {
+  const totalCobros = round2(cobros.reduce((suma, monto) => suma + monto, 0));
+  const porMetodo = [...resumen.porMetodo];
+  const indice = porMetodo.findIndex((metodo) => metodo.metodoPago === 'Cobro de deuda');
+  if (indice >= 0) {
+    porMetodo[indice].cantidad += cobros.length;
+    porMetodo[indice].total = round2(porMetodo[indice].total + totalCobros);
+  } else if (cobros.length > 0) {
+    porMetodo.push({
+      metodoPago: 'Cobro de deuda',
+      cantidad: cobros.length,
+      total: totalCobros,
+    });
+  }
+  porMetodo.sort(
+    (a, b) => b.total - a.total || a.metodoPago.localeCompare(b.metodoPago, 'es')
+  );
+
+  return {
+    ...resumen,
+    totalVentas: round2(resumen.totalVentas + totalCobros),
+    totalEfectivo: round2(resumen.totalEfectivo + totalCobros),
+    porMetodo,
+    cantidadCobros: cobros.length,
+  };
+}
+
 function resumenVentasDia(dia) {
-  const filas = db.prepare('SELECT metodo_pago, total FROM ventas WHERE dia = ?').all(dia);
+  const filas = db
+    .prepare('SELECT metodo_pago, total FROM ventas WHERE dia = ? AND COALESCE(fiado, 0) = 0')
+    .all(dia);
   return resumenVentasFilas(filas);
 }
 
 function resumenVentasRango(desde, hasta) {
-  const filas = hasta
-    ? db
-        .prepare('SELECT metodo_pago, total FROM ventas WHERE fecha >= ? AND fecha <= ?')
-        .all(desde, hasta)
-    : db
-        .prepare('SELECT metodo_pago, total FROM ventas WHERE fecha >= ?')
-        .all(desde);
+  const where = hasta
+    ? 'fecha >= ? AND fecha <= ? AND COALESCE(fiado, 0) = 0'
+    : 'fecha >= ? AND COALESCE(fiado, 0) = 0';
+  const filas = db
+    .prepare(`SELECT metodo_pago, total FROM ventas WHERE ${where}`)
+    .all(...(hasta ? [desde, hasta] : [desde]));
   return resumenVentasFilas(filas);
 }
 
@@ -305,7 +521,10 @@ function cajaAObjeto(fila) {
 function cajaConResumen(fila) {
   const caja = cajaAObjeto(fila);
   if (!caja) return null;
-  const resumen = resumenVentasRango(caja.fechaApertura, caja.fechaCierre);
+  const resumen = agregarCobrosAResumen(
+    resumenVentasRango(caja.fechaApertura, caja.fechaCierre),
+    cobrosDeCaja(caja.id)
+  );
   const retiros = retirosDeCaja(caja.id);
   const totalRetiros = round2(retiros.reduce((suma, retiro) => suma + retiro.monto, 0));
   const efectivoEsperado = round2(caja.montoApertura + resumen.totalEfectivo - totalRetiros);
@@ -349,7 +568,7 @@ function estadoCaja(dia = localDay()) {
        LIMIT 1`
     )
     .get();
-  const resumenDia = resumenVentasDia(dia);
+  const resumenDia = agregarCobrosAResumen(resumenVentasDia(dia), cobrosDelDia(dia));
   const resumen = abierta
     ? abierta.resumen
     : ultimaCerrada
@@ -1006,29 +1225,83 @@ function parsePagoCon(metodoPago, pagoRaw, total) {
   return { pagoCon: round2(pagoCon), vuelto: round2(pagoCon - total) };
 }
 
+app.get('/api/clientes', (_req, res, next) => {
+  try {
+    res.json(clientesResumen());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/clientes/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id de cliente inválido');
+    res.json(detalleCliente(id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/clientes/:id/pagos', (req, res, next) => {
+  try {
+    const clienteId = Number(req.params.id);
+    if (!Number.isInteger(clienteId) || clienteId <= 0) {
+      throw httpError(400, 'Id de cliente inválido');
+    }
+    const cliente = db.prepare('SELECT id, nombre FROM clientes WHERE id = ?').get(clienteId);
+    if (!cliente) throw httpError(404, 'Cliente no encontrado');
+
+    const ventaId = Number(req.body?.ventaId);
+    if (!Number.isInteger(ventaId) || ventaId <= 0) {
+      throw httpError(400, 'Elegí una compra para pagar');
+    }
+    const venta = db
+      .prepare('SELECT * FROM ventas WHERE id = ? AND cliente_id = ? AND COALESCE(fiado, 0) = 1')
+      .get(ventaId, clienteId);
+    if (!venta) throw httpError(404, 'Compra a fiado no encontrada para este cliente');
+
+    const monto = parseMonto(req.body?.monto, 'monto a pagar');
+    if (monto <= 0) throw httpError(400, 'El monto a pagar debe ser mayor a 0');
+
+    const dia = localDay();
+    const caja = cajaAbiertaHoy(dia);
+    if (!caja) throw httpError(409, 'Primero abrí la caja del día para cobrar deudas');
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const pagado = db
+        .prepare('SELECT COALESCE(SUM(monto), 0) AS total FROM pagos_clientes WHERE venta_id = ?')
+        .get(ventaId).total;
+      const saldo = round2(venta.total - pagado);
+      if (saldo <= 0) throw httpError(409, 'Esta compra ya está pagada');
+      if (monto > saldo) {
+        throw httpError(409, `El monto supera la deuda de la compra (${saldo.toFixed(2)})`);
+      }
+
+      db.prepare(
+        `INSERT INTO pagos_clientes
+           (cliente_id, venta_id, monto, fecha, dia, usuario_id, caja_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(clienteId, ventaId, monto, new Date().toISOString(), dia, req.usuario.id, caja.id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+
+    res.status(201).json(detalleCliente(clienteId));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/ventas', soloAdmin, (req, res, next) => {
   try {
     const { periodo, valor, where, params } = parsePeriodoVentas(req.query);
 
     const filas = db.prepare(`SELECT * FROM ventas WHERE ${where} ORDER BY fecha DESC`).all(...params);
-    const ventas = filas.map((fila) => {
-      const items = JSON.parse(fila.resumen);
-      return {
-        id: fila.id,
-        fecha: fila.fecha,
-        dia: fila.dia,
-        metodoPago: fila.metodo_pago,
-        cliente: fila.cliente ?? null,
-        subtotal: round2(items.reduce((suma, item) => suma + item.subtotal, 0)),
-        descuento: round2(fila.descuento ?? 0),
-        descuentoTipo: fila.descuento_tipo ?? null,
-        descuentoValor: round2(fila.descuento_valor ?? 0),
-        pagoCon: fila.pago_con ?? null,
-        vuelto: fila.vuelto ?? null,
-        total: fila.total,
-        items,
-      };
-    });
+    const ventas = filas.map(ventaConEstado);
 
     const totalPeriodo = round2(ventas.reduce((acc, venta) => acc + venta.total, 0));
     const unidades = ventas.reduce(
@@ -1135,20 +1408,26 @@ app.post('/api/ventas', (req, res, next) => {
       );
       const total = round2(subtotal - descuento);
       const { pagoCon, vuelto } = parsePagoCon(metodoPago, req.body?.pagoCon, total);
-      const cliente = parseCliente(req.body?.cliente);
+      const esFiado = metodoPago === 'Fiado';
+      const cliente = esFiado
+        ? clienteParaVenta(req.body)
+        : clienteOpcionalParaVenta(req.body);
+      const clienteId = cliente?.id ?? null;
       const fecha = new Date();
       const info = db
         .prepare(
           `INSERT INTO ventas
-             (fecha, dia, metodo_pago, cliente, total, descuento, descuento_tipo,
-              descuento_valor, pago_con, vuelto, resumen)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             (fecha, dia, metodo_pago, cliente, cliente_id, fiado, total, descuento,
+              descuento_tipo, descuento_valor, pago_con, vuelto, resumen)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           fecha.toISOString(),
           dia,
           metodoPago,
-          cliente,
+          cliente?.nombre ?? null,
+          clienteId,
+          esFiado ? 1 : 0,
           total,
           descuento,
           descuentoTipo,
@@ -1175,7 +1454,12 @@ app.post('/api/ventas', (req, res, next) => {
         fecha: fecha.toISOString(),
         dia,
         metodoPago,
-        cliente,
+        cliente: cliente?.nombre ?? null,
+        clienteId,
+        fiado: esFiado,
+        pagado: !esFiado,
+        montoPagado: 0,
+        saldo: esFiado ? total : 0,
         subtotal,
         descuento,
         descuentoTipo,
@@ -1211,7 +1495,14 @@ app.put('/api/ventas/:id', soloAdmin, (req, res, next) => {
       req.body?.descuentoValor !== undefined ? req.body.descuentoValor : existente.descuento_valor;
     const pagoRaw = req.body?.pagoCon !== undefined ? req.body.pagoCon : existente.pago_con;
     const clienteRaw = req.body?.cliente !== undefined ? req.body.cliente : existente.cliente;
-    const cliente = parseCliente(clienteRaw);
+    const esFiado = metodoPago === 'Fiado';
+    const clienteIdRaw =
+      req.body?.clienteId !== undefined ? req.body.clienteId : existente.cliente_id;
+    const cliente = esFiado
+      ? clienteParaVenta({ clienteId: clienteIdRaw, clienteNombre: clienteRaw })
+      : clienteOpcionalParaVenta({ clienteId: clienteIdRaw, clienteNombre: clienteRaw });
+    const clienteTexto = cliente?.nombre ?? parseCliente(clienteRaw);
+    const clienteId = cliente?.id ?? null;
 
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -1245,12 +1536,14 @@ app.put('/api/ventas/:id', soloAdmin, (req, res, next) => {
 
       db.prepare(
         `UPDATE ventas
-         SET metodo_pago = ?, cliente = ?, total = ?, descuento = ?, descuento_tipo = ?,
-             descuento_valor = ?, pago_con = ?, vuelto = ?, resumen = ?
+         SET metodo_pago = ?, cliente = ?, cliente_id = ?, fiado = ?, total = ?, descuento = ?,
+             descuento_tipo = ?, descuento_valor = ?, pago_con = ?, vuelto = ?, resumen = ?
          WHERE id = ?`
       ).run(
         metodoPago,
-        cliente,
+        clienteTexto,
+        clienteId,
+        esFiado ? 1 : 0,
         total,
         descuento,
         descuentoTipo,
@@ -1283,7 +1576,9 @@ app.put('/api/ventas/:id', soloAdmin, (req, res, next) => {
         fecha: existente.fecha,
         dia: existente.dia,
         metodoPago,
-        cliente,
+        cliente: clienteTexto,
+        clienteId,
+        fiado: esFiado,
         subtotal,
         descuento,
         descuentoTipo,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ToastContainer, toast } from 'react-toastify';
 import { api, guardarToken, limpiarToken, leerToken } from './api.js';
 import Login from './components/Login.jsx';
 import Inventario from './components/Inventario.jsx';
@@ -10,18 +11,18 @@ import Caja from './components/Caja.jsx';
 import AbrirCajaModal from './components/AbrirCajaModal.jsx';
 import MovimientosStock from './components/MovimientosStock.jsx';
 import ConfiguracionModal from './components/ConfiguracionModal.jsx';
+import Clientes from './components/Clientes.jsx';
 import {
   IconAlert,
   IconBox,
-  IconCheck,
   IconDownload,
   IconHistory,
   IconReceipt,
   IconSettings,
   IconStore,
   IconTag,
+  IconUsers,
   IconWallet,
-  IconX,
 } from './components/Icons.jsx';
 import { formatARS, todayLocal } from './utils.js';
 
@@ -30,6 +31,7 @@ const TABS = [
   { id: 'stock-bajo', etiqueta: 'Stock bajo', Icono: IconAlert },
   { id: 'movimientos', etiqueta: 'Movimientos', Icono: IconHistory },
   { id: 'ventas', etiqueta: 'Ventas', Icono: IconReceipt },
+  { id: 'clientes', etiqueta: 'Clientes', Icono: IconUsers },
   { id: 'caja', etiqueta: 'Caja', Icono: IconWallet },
   { id: 'categorias', etiqueta: 'Agregar productos', Icono: IconTag },
 ];
@@ -45,12 +47,12 @@ export default function App() {
   const [mostrarApertura, setMostrarApertura] = useState(false);
   const cajaSolicitud = useRef(0);
   const aperturaPreguntada = useRef(false);
+  const ultimoAviso = useRef({ mensaje: '', momento: 0 });
   const diaActual = useRef(todayLocal());
   const [filtros, setFiltros] = useState({ busqueda: '', categoria: '' });
   const [carrito, setCarrito] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [toast, setToast] = useState(null);
   const [comprando, setComprando] = useState(false);
   const [mostrarConfiguracion, setMostrarConfiguracion] = useState(false);
   const [sesion, setSesion] = useState(null);
@@ -68,12 +70,20 @@ export default function App() {
   });
 
   const notify = useCallback((mensaje, tipo = 'success') => {
-    setToast({ mensaje, tipo, id: Date.now() });
+    const ahora = Date.now();
+    if (mensaje === ultimoAviso.current.mensaje && ahora - ultimoAviso.current.momento < 800) {
+      return;
+    }
+    ultimoAviso.current = { mensaje, momento: ahora };
+    const tipoToast = tipo === 'error' ? 'error' : 'success';
+    toast[mensaje === 'Failed to fetch' ? 'error' : tipoToast](mensaje, {
+      className: `toast-${mensaje === 'Failed to fetch' ? 'error' : tipoToast}`,
+    });
   }, []);
 
   const esAdmin = sesion?.rol === 'admin';
   const tabsVisibles = TABS.filter(
-    ({ id }) => esAdmin || ['inventario', 'stock-bajo', 'caja'].includes(id)
+    ({ id }) => esAdmin || ['inventario', 'stock-bajo', 'caja', 'clientes'].includes(id)
   );
 
   useEffect(() => {
@@ -114,6 +124,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    function avisarErrorRed() {
+      notify('Failed to fetch', 'error');
+    }
+    window.addEventListener('api-error', avisarErrorRed);
+    return () => window.removeEventListener('api-error', avisarErrorRed);
+  }, [notify]);
+
+  useEffect(() => {
     if (!sesion) return;
     if (!tabsVisibles.some(({ id }) => id === tab)) setTab('inventario');
   }, [sesion, esAdmin, tab]);
@@ -121,12 +139,6 @@ export default function App() {
   useEffect(() => {
     if (mostrarConfiguracion && esAdmin) cargarUsuarios();
   }, [mostrarConfiguracion, esAdmin]);
-
-  useEffect(() => {
-    if (!toast) return undefined;
-    const timer = setTimeout(() => setToast(null), 3600);
-    return () => clearTimeout(timer);
-  }, [toast]);
 
   useEffect(() => {
     const tema = modoOscuro ? 'dark' : 'light';
@@ -317,11 +329,12 @@ export default function App() {
   async function crearProducto(datos) {
     const creado = await api.crearProducto(datos);
     setRefreshKey((valor) => valor + 1);
-    notify(`"${creado.nombre}" se agregó al inventario`);
+    notify(`Producto ${creado.nombre} creado con exito`);
     return creado;
   }
 
   async function editarProducto(id, datos) {
+    const anterior = productos.find((producto) => producto.id === id);
     const actualizado = await api.actualizarProducto(id, datos);
     setRefreshKey((valor) => valor + 1);
     setCarrito((actual) =>
@@ -336,21 +349,28 @@ export default function App() {
         )
         .filter((item) => item.cantidad > 0 && Number(actualizado.activo) !== 0)
     );
-    notify(`"${actualizado.nombre}" se actualizó correctamente`);
+    const cambioStock =
+      anterior && Number(anterior.cantidad) !== Number(actualizado.cantidad);
+    notify(
+      cambioStock
+        ? 'Stock actualizado con exito'
+        : `Producto ${actualizado.nombre} editado con exito`
+    );
     return actualizado;
   }
 
   async function eliminarProducto(id) {
+    const producto = productos.find((item) => item.id === id);
     await api.eliminarProducto(id);
     setRefreshKey((valor) => valor + 1);
     setCarrito((actual) => actual.filter((item) => item.producto.id !== id));
-    notify('Producto eliminado del inventario');
+    notify(`Producto ${producto?.nombre ?? id} eliminado con exito`);
   }
 
   async function crearCategoria(nombre) {
     const categoria = await api.crearCategoria(nombre);
     setRefreshKey((valor) => valor + 1);
-    notify(`Categoría "${categoria.nombre}" creada`);
+    notify(`Categoria ${categoria.nombre} creada con exito`);
     return categoria;
   }
 
@@ -373,7 +393,7 @@ export default function App() {
     setCaja(datos);
     setCargandoCaja(false);
     setMostrarApertura(false);
-    notify(`Caja abierta con ${formatARS(datos.caja.montoApertura)}`);
+    notify('Buenos dias, caja abierta');
     return datos;
   }
 
@@ -382,7 +402,7 @@ export default function App() {
     cajaSolicitud.current += 1;
     setCaja(datos);
     setCargandoCaja(false);
-    notify(`Retiro de ${formatARS(monto)} registrado`);
+    notify('Dinero retirado con exito');
     return datos;
   }
 
@@ -423,7 +443,7 @@ export default function App() {
   async function crearUsuario(datos) {
     const creado = await api.crearUsuario(datos);
     await cargarUsuarios();
-    notify(`Usuario "${creado.nombre}" creado como ${creado.rol === 'admin' ? 'Admin' : 'Empleado'}`);
+    notify('Usuario creado con exito');
     return creado;
   }
 
@@ -480,15 +500,14 @@ export default function App() {
 
     setComprando(true);
     try {
-      const venta = await api.crearVenta(
+      await api.crearVenta(
         metodoPago,
         carrito.map(({ producto, cantidad }) => ({ productoId: producto.id, cantidad })),
         opciones
       );
       setCarrito([]);
       setRefreshKey((valor) => valor + 1);
-      setTab(esAdmin ? 'ventas' : 'caja');
-      notify(`Venta #${venta.id} registrada por ${formatARS(venta.total)}`);
+      notify('Felicitaciones por la venta');
     } catch (err) {
       notify(err.message, 'error');
     } finally {
@@ -527,6 +546,28 @@ export default function App() {
             </span>
           </button>
 
+          <div className="header-actions">
+            <span className="header-usuario" title={`Rol: ${esAdmin ? 'Admin' : 'Empleado'}`}>
+              <strong>{sesion.nombre}</strong>
+              <small>{esAdmin ? 'Admin' : 'Empleado'}</small>
+            </span>
+            {esAdmin && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={descargarBase}
+                title="Descargar el archivo SQLite completo"
+              >
+                <IconDownload size={16} />
+                <span className="hide-sm">Descargar base</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <div className="app-body">
+        <aside className="sidebar">
           <nav className="tabs" aria-label="Secciones del sistema">
             {tabsVisibles.map(({ id, etiqueta, Icono }) => (
               <button
@@ -548,30 +589,21 @@ export default function App() {
                 )}
               </button>
             ))}
+
+            <button
+              type="button"
+              className={`tab ${mostrarConfiguracion ? 'active' : ''}`}
+              onClick={() => setMostrarConfiguracion(true)}
+              aria-label="Abrir configuración"
+            >
+              <IconSettings size={18} />
+              <span>Configuración</span>
+            </button>
           </nav>
+        </aside>
 
-          <div className="header-actions">
-            <span className="header-usuario" title={`Rol: ${esAdmin ? 'Admin' : 'Empleado'}`}>
-              <strong>{sesion.nombre}</strong>
-              <small>{esAdmin ? 'Admin' : 'Empleado'}</small>
-            </span>
-            {esAdmin && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={descargarBase}
-                title="Descargar el archivo SQLite completo"
-              >
-                <IconDownload size={16} />
-                <span className="hide-sm">Descargar base</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
-
-      <main className="app-main">
-        {tab === 'inventario' && (
+        <main className="app-main">
+          {tab === 'inventario' && (
           <div className="inventario-layout">
             <Inventario
               productos={productos}
@@ -615,6 +647,10 @@ export default function App() {
 
         {tab === 'ventas' && <Ventas refreshKey={refreshKey} onEditarVenta={editarVenta} />}
 
+        {tab === 'clientes' && (
+          <Clientes onAviso={notify} onCambio={() => setRefreshKey((valor) => valor + 1)} />
+        )}
+
         {tab === 'caja' && (
           <Caja
             datos={caja}
@@ -635,17 +671,8 @@ export default function App() {
             onIrAInventario={() => setTab('inventario')}
           />
         )}
-      </main>
-
-      <button
-        type="button"
-        className="settings-fab"
-        title="Configuración"
-        aria-label="Abrir configuración"
-        onClick={() => setMostrarConfiguracion(true)}
-      >
-        <IconSettings size={22} />
-      </button>
+        </main>
+      </div>
 
       <footer className="app-footer">
         <span>Datos guardados localmente en SQLite</span>
@@ -677,20 +704,14 @@ export default function App() {
         />
       )}
 
-      {toast && (
-        <div className={`toast toast-${toast.tipo}`} role="status" key={toast.id}>
-          {toast.tipo === 'error' ? <IconAlert size={18} /> : <IconCheck size={18} />}
-          <span>{toast.mensaje}</span>
-          <button
-            type="button"
-            className="toast-close"
-            aria-label="Cerrar aviso"
-            onClick={() => setToast(null)}
-          >
-            <IconX size={15} />
-          </button>
-        </div>
-      )}
+      <ToastContainer
+        position="top-right"
+        autoClose={3600}
+        hideProgressBar={false}
+        closeOnClick
+        pauseOnHover
+        theme={modoOscuro ? 'dark' : 'light'}
+      />
     </div>
   );
 }
