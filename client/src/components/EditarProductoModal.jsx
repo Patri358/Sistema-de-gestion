@@ -9,6 +9,7 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
     categoria: producto.categoria,
     precio: String(producto.precio),
     cantidad: String(producto.cantidad),
+    stock_minimo: String(producto.stock_minimo ?? 10),
     codigo_barras: producto.codigo_barras || '',
     imagen: producto.imagen || null,
     activo: Number(producto.activo ?? 1) !== 0,
@@ -83,6 +84,14 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
       setError('La cantidad debe ser un número entero mayor o igual a 0');
       return;
     }
+    if (
+      form.stock_minimo === '' ||
+      !Number.isInteger(Number(form.stock_minimo)) ||
+      Number(form.stock_minimo) < 0
+    ) {
+      setError('El stock mínimo debe ser un número entero mayor o igual a 0');
+      return;
+    }
     if (stockCambia && !motivoStock.trim()) {
       setError('Indicá el motivo del movimiento de stock');
       return;
@@ -95,6 +104,7 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
         categoria: form.categoria,
         precio: Number(form.precio),
         cantidad: Number(form.cantidad),
+        stock_minimo: Number(form.stock_minimo),
         codigo_barras: form.codigo_barras.trim(),
         imagen: form.imagen,
         activo: form.activo,
@@ -150,7 +160,7 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
           </select>
         </div>
 
-        <div className="form-row">
+        <div className="form-row form-row-3">
           <div className="field">
             <label htmlFor="editar-precio">Precio</label>
             <input
@@ -174,6 +184,21 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
               onChange={(e) => setCampo('cantidad', e.target.value)}
               required
             />
+          </div>
+          <div className="field">
+            <label htmlFor="editar-stock-minimo">Stock mínimo</label>
+            <input
+              id="editar-stock-minimo"
+              type="number"
+              min="0"
+              step="1"
+              value={form.stock_minimo}
+              onChange={(e) => setCampo('stock_minimo', e.target.value)}
+              required
+            />
+            <small className="field-hint">
+              Aparece en Stock bajo cuando queda por debajo de este valor. Con 0 no genera alertas.
+            </small>
           </div>
         </div>
 

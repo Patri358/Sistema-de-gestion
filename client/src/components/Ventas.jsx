@@ -239,9 +239,12 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
                   >
                     <span className="venta-id">#{venta.id}</span>
                     <span className="venta-hora">
-                      {periodo === 'dia'
-                        ? formatHora(venta.fecha)
-                        : `${formatFechaCorta(venta.dia)} · ${formatHora(venta.fecha)}`}
+                      <span>
+                        {periodo === 'dia'
+                          ? formatHora(venta.fecha)
+                          : `${formatFechaCorta(venta.dia)} · ${formatHora(venta.fecha)}`}
+                      </span>
+                      {venta.cliente && <small className="venta-cliente">{venta.cliente}</small>}
                     </span>
                     <span className="chip chip-pago">{venta.metodoPago}</span>
                     <span className="venta-unidades">{unidadesVenta} u.</span>
@@ -277,10 +280,17 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
                         </tbody>
                       </table>
 
-                      {(venta.descuento > 0 ||
+                      {(venta.cliente ||
+                        venta.descuento > 0 ||
                         venta.pagoCon !== null ||
                         venta.vuelto !== null) && (
                         <div className="venta-detalle-resumen">
+                          {venta.cliente && (
+                            <div className="summary-row">
+                              <span>Comprador</span>
+                              <span>{venta.cliente}</span>
+                            </div>
+                          )}
                           {venta.descuento > 0 && (
                             <>
                               <div className="summary-row">

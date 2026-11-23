@@ -99,60 +99,60 @@ export default function ProductoForm({ categorias, onCrear }) {
   }
 
   return (
-    <section className="card form-card">
+    <section className="card form-card producto-form-card">
       <div className="card-title">
         <span className="icon-badge">
           <IconPlus size={18} />
         </span>
         <div>
           <h2>Nuevo producto</h2>
-          <p className="card-sub">Usá una categoría ya creada y completá los datos.</p>
+          <p className="card-sub">Usá una categoría ya creada y completá los datos del producto.</p>
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="formulario">
-        <div className="field">
-          <label htmlFor="nombre">Nombre del producto</label>
-          <input
-            id="nombre"
-            type="text"
-            value={form.nombre}
-            maxLength={120}
-            placeholder="Ej: Leche entera 1L"
-            onChange={(e) => setCampo('nombre', e.target.value)}
-            required
-          />
-        </div>
+      <form onSubmit={handleSubmit} className="formulario producto-form">
+        <div className="producto-form-grid">
+          <div className="field producto-form-nombre">
+            <label htmlFor="nombre">Nombre del producto</label>
+            <input
+              id="nombre"
+              type="text"
+              value={form.nombre}
+              maxLength={120}
+              placeholder="Ej: Leche entera 1L"
+              onChange={(e) => setCampo('nombre', e.target.value)}
+              required
+            />
+          </div>
 
-        <div className="field">
-          <label htmlFor="categoria">
-            <IconTag size={13} /> Categoría
-          </label>
-          <select
-            id="categoria"
-            value={form.categoria}
-            onChange={(e) => setCampo('categoria', e.target.value)}
-            disabled={categorias.length === 0}
-            required
-          >
-            <option value="" disabled>
-              {categorias.length === 0 ? 'No hay categorías creadas' : 'Seleccioná una categoría'}
-            </option>
-            {categorias.map((categoria) => (
-              <option key={categoria.id} value={categoria.nombre}>
-                {categoria.nombre}
+          <div className="field">
+            <label htmlFor="categoria">
+              <IconTag size={13} /> Categoría
+            </label>
+            <select
+              id="categoria"
+              value={form.categoria}
+              onChange={(e) => setCampo('categoria', e.target.value)}
+              disabled={categorias.length === 0}
+              required
+            >
+              <option value="" disabled>
+                {categorias.length === 0 ? 'No hay categorías creadas' : 'Seleccioná una categoría'}
               </option>
-            ))}
-          </select>
+              {categorias.map((categoria) => (
+                <option key={categoria.id} value={categoria.nombre}>
+                  {categoria.nombre}
+                </option>
+              ))}
+            </select>
 
-          {categorias.length === 0 && (
-            <div className="inline-notice">
-              <span>Primero creá una categoría con el formulario de arriba.</span>
-            </div>
-          )}
-        </div>
+            {categorias.length === 0 && (
+              <div className="inline-notice">
+                <span>Primero creá una categoría con el formulario de abajo.</span>
+              </div>
+            )}
+          </div>
 
-        <div className="form-row">
           <div className="field">
             <label htmlFor="precio">Precio</label>
             <input
@@ -166,6 +166,7 @@ export default function ProductoForm({ categorias, onCrear }) {
               required
             />
           </div>
+
           <div className="field">
             <label htmlFor="cantidad">Cantidad</label>
             <input
@@ -179,77 +180,81 @@ export default function ProductoForm({ categorias, onCrear }) {
               required
             />
           </div>
-        </div>
 
-        <div className="field">
-          <label htmlFor="codigo">Código de barra</label>
-          <input
-            id="codigo"
-            type="text"
-            value={form.codigo_barras}
-            maxLength={60}
-            placeholder="Opcional, ej: 7791234567890"
-            onChange={(e) => setCampo('codigo_barras', e.target.value)}
-          />
-        </div>
-
-        <div className="field">
-          <span className="label">Imagen</span>
-          {form.imagen ? (
-            <div className="imagen-preview">
-              <img src={form.imagen} alt="Vista previa del producto" />
-              <div className="imagen-preview-acciones">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => inputImagen.current?.click()}
-                >
-                  Cambiar
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-danger-ghost btn-sm"
-                  onClick={() => setCampo('imagen', null)}
-                >
-                  <IconX size={15} /> Quitar
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="upload-box"
-              onClick={() => inputImagen.current?.click()}
-              disabled={procesandoImagen}
-            >
-              <IconImage size={26} />
-              <span>{procesandoImagen ? 'Procesando imagen...' : 'Subir imagen'}</span>
-              <small>JPG, PNG o WEBP · se comprime automáticamente</small>
-            </button>
-          )}
-          <input
-            ref={inputImagen}
-            type="file"
-            accept="image/*"
-            onChange={handleImagen}
-            hidden
-          />
-        </div>
-
-        {error && (
-          <div className="alert alert-error" role="alert">
-            <IconAlert size={18} />
-            <span>{error}</span>
+          <div className="field">
+            <label htmlFor="codigo">Código de barra</label>
+            <input
+              id="codigo"
+              type="text"
+              value={form.codigo_barras}
+              maxLength={60}
+              placeholder="Opcional"
+              onChange={(e) => setCampo('codigo_barras', e.target.value)}
+            />
           </div>
-        )}
+        </div>
 
-        <button
-          type="submit"
-          className="btn btn-primary btn-block"
-          disabled={enviando || procesandoImagen || categorias.length === 0}
-        >
-          {enviando ? 'Guardando...' : 'Guardar producto'}
-        </button>
+        <div className="producto-form-footer">
+          <div className="field producto-form-imagen">
+            <span className="label">Imagen</span>
+            {form.imagen ? (
+              <div className="imagen-preview">
+                <img src={form.imagen} alt="Vista previa del producto" />
+                <div className="imagen-preview-acciones">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => inputImagen.current?.click()}
+                  >
+                    Cambiar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger-ghost btn-sm"
+                    onClick={() => setCampo('imagen', null)}
+                  >
+                    <IconX size={15} /> Quitar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="upload-box upload-box-compact"
+                onClick={() => inputImagen.current?.click()}
+                disabled={procesandoImagen}
+              >
+                <IconImage size={22} />
+                <span>{procesandoImagen ? 'Procesando imagen...' : 'Subir imagen'}</span>
+                <small>JPG, PNG o WEBP · se comprime automáticamente</small>
+              </button>
+            )}
+            <input
+              ref={inputImagen}
+              type="file"
+              accept="image/*"
+              onChange={handleImagen}
+              hidden
+            />
+          </div>
+
+          <div className="producto-form-actions">
+            {error && (
+              <div className="alert alert-error" role="alert">
+                <IconAlert size={18} />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="btn btn-primary btn-block"
+              disabled={enviando || procesandoImagen || categorias.length === 0}
+            >
+              {enviando ? 'Guardando...' : 'Guardar producto'}
+            </button>
+          </div>
+        </div>
       </form>
     </section>
   );

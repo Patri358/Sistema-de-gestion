@@ -3,10 +3,14 @@ import EditarProductoModal from './EditarProductoModal.jsx';
 import { IconAlert, IconCheck, IconEdit, IconTag } from './Icons.jsx';
 import { formatARS } from '../utils.js';
 
-function StockBajoCard({ producto, limite, onEditar }) {
+function StockBajoCard({ producto, onEditar, puedeEditar }) {
   const sinStock = producto.cantidad <= 0;
-  const faltan = Math.max(0, limite - producto.cantidad);
-  const porcentaje = Math.min(100, Math.max(4, Math.round((producto.cantidad / limite) * 100)));
+  const minimo = Number(producto.stock_minimo ?? 10);
+  const faltan = Math.max(0, minimo - producto.cantidad);
+  const porcentaje = Math.min(
+    100,
+    Math.max(4, Math.round((producto.cantidad / Math.max(1, minimo)) * 100))
+  );
 
   return (
     <article className={`stock-card ${sinStock ? 'critico' : ''}`}>
@@ -32,27 +36,35 @@ function StockBajoCard({ producto, limite, onEditar }) {
 
       <p className="stock-card-alerta">
         {sinStock
-          ? 'Reponé este producto para volver a venderlo.'
-          : `Faltan ${faltan} unidad${faltan === 1 ? '' : 'es'} para salir de la alerta.`}
+          ? `Reponé este producto para volver a venderlo. Stock mínimo: ${minimo}.`
+          : `Faltan ${faltan} unidad${faltan === 1 ? '' : 'es'} para alcanzar el stock mínimo (${minimo}).`}
       </p>
 
       <div className="stock-card-foot">
         <span className="barcode" title="Código de barra">
           {producto.codigo_barras || 'Sin código'}
         </span>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onEditar(producto)}>
-          <IconEdit size={15} />
-          Editar stock
-        </button>
+        {puedeEditar && (
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => onEditar(producto)}>
+            <IconEdit size={15} />
+            Editar stock
+          </button>
+        )}
       </div>
     </article>
   );
 }
 
-export default function StockBajo({ datos, cargando, categorias, onEditar, onIrAInventario }) {
+export default function StockBajo({
+  datos,
+  cargando,
+  categorias,
+  onEditar,
+  onIrAInventario,
+  puedeEditar = true,
+}) {
   const [productoEditando, setProductoEditando] = useState(null);
   const productos = datos?.productos ?? [];
-  const limite = datos?.limite ?? 10;
   const sinStock = productos.filter((producto) => producto.cantidad <= 0).length;
 
   return (
@@ -61,8 +73,9 @@ export default function StockBajo({ datos, cargando, categorias, onEditar, onIrA
         <div>
           <h1>Stock bajo</h1>
           <p>
-            Productos con menos de {limite} unidades. Al reponerlos, salen automáticamente de esta
-            lista.
+            {puedeEditar
+              ? 'Productos por debajo del stock mínimo configurado. Podés ajustarlo desde Editar producto.'
+              : 'Productos por debajo del stock mínimo configurado. Avisá al administrador para reponerlos.'}
           </p>
         </div>
         <span className="count-pill">
@@ -82,7 +95,7 @@ export default function StockBajo({ datos, cargando, categorias, onEditar, onIrA
             <IconCheck size={28} />
           </span>
           <h2>Todo el stock está al día</h2>
-          <p>No hay productos con menos de {limite} unidades en este momento.</p>
+          <p>No hay productos por debajo de su stock mínimo en este momento.</p>
           <button type="button" className="btn btn-secondary" onClick={onIrAInventario}>
             Ir al inventario
           </button>
@@ -105,15 +118,15 @@ export default function StockBajo({ datos, cargando, categorias, onEditar, onIrA
               <StockBajoCard
                 key={producto.id}
                 producto={producto}
-                limite={limite}
                 onEditar={setProductoEditando}
+                puedeEditar={puedeEditar}
               />
             ))}
           </div>
         </>
       )}
 
-      {productoEditando && (
+      {puedeEditar && productoEditando && (
         <EditarProductoModal
           producto={productoEditando}
           categorias={categorias}

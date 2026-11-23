@@ -23,7 +23,7 @@ function estadoStock(cantidad) {
   return { clase: 'stock-ok', texto: `${cantidad} en stock` };
 }
 
-function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) {
+function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar, puedeEditar }) {
   const stock = estadoStock(producto.cantidad);
   const deshabilitado = Number(producto.activo) === 0;
   const sinStock = producto.cantidad <= 0;
@@ -56,26 +56,28 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar }) 
         {deshabilitado && <span className="media-tag">Deshabilitado</span>}
         {!deshabilitado && sinStock && <span className="media-tag">Sin stock</span>}
 
-        <div className="product-actions">
-          <button
-            type="button"
-            className="card-action"
-            title="Editar producto"
-            aria-label={`Editar ${producto.nombre}`}
-            onClick={() => onEditar(producto)}
-          >
-            <IconEdit size={16} />
-          </button>
-          <button
-            type="button"
-            className="card-action danger"
-            title="Eliminar producto"
-            aria-label={`Eliminar ${producto.nombre}`}
-            onClick={() => onEliminar(producto)}
-          >
-            <IconTrash size={16} />
-          </button>
-        </div>
+        {puedeEditar && (
+          <div className="product-actions">
+            <button
+              type="button"
+              className="card-action"
+              title="Editar producto"
+              aria-label={`Editar ${producto.nombre}`}
+              onClick={() => onEditar(producto)}
+            >
+              <IconEdit size={16} />
+            </button>
+            <button
+              type="button"
+              className="card-action danger"
+              title="Eliminar producto"
+              aria-label={`Eliminar ${producto.nombre}`}
+              onClick={() => onEliminar(producto)}
+            >
+              <IconTrash size={16} />
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="product-body">
@@ -163,6 +165,7 @@ export default function Inventario({
   onEditar,
   onEliminar,
   onIrACategorias,
+  puedeEditar = true,
 }) {
   const [productoEditando, setProductoEditando] = useState(null);
   const [productoAEliminar, setProductoAEliminar] = useState(null);
@@ -224,7 +227,11 @@ export default function Inventario({
       <div className="page-head">
         <div>
           <h1>Inventario</h1>
-          <p>Buscá por nombre o código de barra, editá el stock y armá el carrito.</p>
+          <p>
+            {puedeEditar
+              ? 'Buscá por nombre o código de barra, editá el stock y armá el carrito.'
+              : 'Buscá por nombre o código de barra y armá el carrito.'}
+          </p>
         </div>
         <span className="count-pill">
           {productos.length} {productos.length === 1 ? 'producto' : 'productos'}
@@ -326,9 +333,11 @@ export default function Inventario({
             <p>
               {hayFiltros
                 ? 'Probá con otro nombre, código de barra o categoría.'
-                : categorias.length === 0
-                  ? 'Primero creá una categoría desde la sección Categorías y después cargá tu primer producto.'
-                  : 'Cargá el primer producto desde la sección Categorías.'}
+                : puedeEditar
+                  ? categorias.length === 0
+                    ? 'Primero creá una categoría desde la sección Agregar productos y después cargá tu primer producto.'
+                    : 'Cargá el primer producto desde la sección Agregar productos.'
+                  : 'No hay productos disponibles en este momento.'}
             </p>
             {hayFiltros ? (
               <button
@@ -339,9 +348,11 @@ export default function Inventario({
                 Ver todos los productos
               </button>
             ) : (
-              <button type="button" className="btn btn-secondary" onClick={onIrACategorias}>
-                {categorias.length === 0 ? 'Crear categoría' : 'Cargar producto'}
-              </button>
+              puedeEditar && (
+                <button type="button" className="btn btn-secondary" onClick={onIrACategorias}>
+                  {categorias.length === 0 ? 'Crear categoría' : 'Cargar producto'}
+                </button>
+              )
             )}
           </div>
         ) : (
@@ -357,12 +368,13 @@ export default function Inventario({
                   setErrorEliminar('');
                   setProductoAEliminar(seleccionado);
                 }}
+                puedeEditar={puedeEditar}
               />
             ))}
           </div>
         )}
 
-      {productoEditando && (
+      {puedeEditar && productoEditando && (
         <EditarProductoModal
           producto={productoEditando}
           categorias={categorias}
@@ -371,7 +383,7 @@ export default function Inventario({
         />
       )}
 
-      {productoAEliminar && (
+      {puedeEditar && productoAEliminar && (
         <ConfirmModal
           titulo="Eliminar producto"
           mensaje={`¿Seguro que querés eliminar "${productoAEliminar.nombre}"?`}

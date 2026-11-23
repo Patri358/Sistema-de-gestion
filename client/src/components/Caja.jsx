@@ -72,6 +72,8 @@ function DetalleCierre({ sesion }) {
 
       <div className="caja-resumen-rows">
         <Fila etiqueta="Apertura" valor={formatARS(sesion.montoApertura)} />
+        <Fila etiqueta="Abierta por" valor={sesion.abiertoPor ?? 'Sin registro'} />
+        <Fila etiqueta="Cerrada por" valor={sesion.cerradoPor ?? 'Sin registro'} />
         <Fila etiqueta="Ventas en efectivo" valor={formatARS(resumen.totalEfectivo)} />
         <Fila etiqueta="Otros medios de pago" valor={formatARS(resumen.totalOtros)} />
         <Fila
@@ -267,9 +269,9 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onRetirarCa
           </strong>
           <p>
             {estado === 'abierta'
-              ? `Abierta a las ${formatHora(sesionAbierta.fechaApertura)} con ${formatARS(sesionAbierta.montoApertura)}.`
+              ? `Abierta por ${sesionAbierta.abiertoPor ?? 'Sin registro'} a las ${formatHora(sesionAbierta.fechaApertura)} con ${formatARS(sesionAbierta.montoApertura)}.`
               : estado === 'cerrada'
-                ? `Última sesión cerrada a las ${formatHora(datos.ultimaCerrada?.fechaCierre ?? ultimoCierre)} con ${formatARS(datos.ultimaCerrada?.montoCierre ?? 0)}. Podés abrir una nueva.`
+                ? `Cerrada por ${datos.ultimaCerrada?.cerradoPor ?? 'Sin registro'} a las ${formatHora(datos.ultimaCerrada?.fechaCierre ?? ultimoCierre)} con ${formatARS(datos.ultimaCerrada?.montoCierre ?? 0)}. Podés abrir una nueva.`
                 : 'Abrila para habilitar el registro de ventas del día.'}
           </p>
         </div>
@@ -424,8 +426,8 @@ export default function Caja({ datos, cargando, onSolicitarApertura, onRetirarCa
                   </strong>
                   <small>
                     {sesion.montoCierre === null
-                      ? `Abierta · ${sesion.resumen.cantidadVentas} ventas`
-                      : `Cerrada · contado ${formatARS(sesion.montoCierre)}`}
+                      ? `Abierta por ${sesion.abiertoPor ?? 'Sin registro'} · ${sesion.resumen.cantidadVentas} ventas`
+                      : `Cerrada por ${sesion.cerradoPor ?? 'Sin registro'} · contado ${formatARS(sesion.montoCierre)}`}
                   </small>
                 </div>
                 <strong className="caja-sesion-total">

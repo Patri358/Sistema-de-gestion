@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +31,7 @@ db.exec(`
     categoria TEXT NOT NULL,
     precio REAL NOT NULL CHECK (precio >= 0),
     cantidad INTEGER NOT NULL DEFAULT 0 CHECK (cantidad >= 0),
+    stock_minimo INTEGER NOT NULL DEFAULT 10 CHECK (stock_minimo >= 0),
     imagen TEXT,
     codigo_barras TEXT UNIQUE,
     activo INTEGER NOT NULL DEFAULT 1
@@ -40,6 +42,7 @@ db.exec(`
     fecha TEXT NOT NULL,
     dia TEXT NOT NULL,
     metodo_pago TEXT NOT NULL,
+    cliente TEXT,
     total REAL NOT NULL CHECK (total >= 0),
     descuento REAL NOT NULL DEFAULT 0,
     descuento_tipo TEXT,
@@ -79,6 +82,19 @@ db.exec(`
     fecha TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS usuarios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    rol TEXT NOT NULL CHECK (rol IN ('admin', 'empleado')),
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS configuracion (
+    clave TEXT PRIMARY KEY,
+    valor TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_ventas_dia ON ventas (dia);
   CREATE INDEX IF NOT EXISTS idx_productos_nombre ON productos (nombre);
   CREATE INDEX IF NOT EXISTS idx_movimientos_stock_producto
@@ -94,6 +110,8 @@ function asegurarColumna(tabla, columna, definicion) {
 }
 
 asegurarColumna('productos', 'activo', 'INTEGER NOT NULL DEFAULT 1');
+asegurarColumna('productos', 'stock_minimo', 'INTEGER NOT NULL DEFAULT 10');
+asegurarColumna('ventas', 'cliente', 'TEXT');
 asegurarColumna('ventas', 'descuento', 'REAL NOT NULL DEFAULT 0');
 asegurarColumna('ventas', 'descuento_tipo', 'TEXT');
 asegurarColumna('ventas', 'descuento_valor', 'REAL NOT NULL DEFAULT 0');
@@ -129,6 +147,9 @@ if (/dia\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(cajasSql ?? '')) {
   }
 }
 
+asegurarColumna('cajas', 'abierto_por', 'INTEGER');
+asegurarColumna('cajas', 'cerrado_por', 'INTEGER');
+
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cajas_dia ON cajas (dia);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_cajas_abierta
@@ -140,3 +161,71 @@ db.exec(`
   FROM productos
   WHERE TRIM(categoria) <> '';
 `);
+
+if (!db.prepare('SELECT clave FROM configuracion WHERE clave = ?').get('clave_sesion')) {
+  db.prepare('INSERT INTO configuracion (clave, valor) VALUES (?, ?)').run(
+    'clave_sesion',
+    crypto.randomBytes(32).toString('hex')
+  );
+}
+
+const claveSesion = db
+  .prepare('SELECT valor FROM configuracion WHERE clave = ?')
+  .get('clave_sesion').valor;
+
+export function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `scrypt:${salt}:${hash}`;
+}
+
+export function verificarPassword(password, guardado) {
+  try {
+    const [algoritmo, salt, hash] = String(guardado).split(':');
+    if (algoritmo !== 'scrypt' || !salt || !hash) return false;
+    const calculado = crypto.scryptSync(String(password), salt, 64);
+    const esperado = Buffer.from(hash, 'hex');
+    return calculado.length === esperado.length && crypto.timingSafeEqual(calculado, esperado);
+  } catch {
+    return false;
+  }
+}
+
+function codificarBase64Url(valor) {
+  return Buffer.from(valor).toString('base64url');
+}
+
+export function crearToken(usuario) {
+  const payload = codificarBase64Url(
+    JSON.stringify({ id: usuario.id, nombre: usuario.nombre, rol: usuario.rol, iat: Date.now() })
+  );
+  const firma = crypto.createHmac('sha256', claveSesion).update(payload).digest('base64url');
+  return `${payload}.${firma}`;
+}
+
+export function verificarToken(token) {
+  try {
+    const [payload, firma] = String(token ?? '').split('.');
+    if (!payload || !firma) return null;
+    const esperada = crypto.createHmac('sha256', claveSesion).update(payload).digest('base64url');
+    if (
+      firma.length !== esperada.length ||
+      !crypto.timingSafeEqual(Buffer.from(firma), Buffer.from(esperada))
+    ) {
+      return null;
+    }
+    const datos = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (!Number.isInteger(datos.id) || datos.id <= 0) return null;
+    return datos;
+  } catch {
+    return null;
+  }
+}
+
+if (!db.prepare('SELECT id FROM usuarios WHERE nombre = ? COLLATE NOCASE').get('patricio')) {
+  db.prepare('INSERT INTO usuarios (nombre, password_hash, rol) VALUES (?, ?, ?)').run(
+    'patricio',
+    hashPassword('123456789'),
+    'admin'
+  );
+}

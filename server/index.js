@@ -4,7 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db } from './db.js';
+import {
+  crearToken,
+  db,
+  hashPassword,
+  verificarPassword,
+  verificarToken,
+} from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -22,6 +28,59 @@ function httpError(status, message) {
 
 function round2(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function parseNombreUsuario(raw) {
+  const nombre = String(raw ?? '').trim();
+  if (!nombre) throw httpError(400, 'El nombre de usuario es obligatorio');
+  if (nombre.length > 60) throw httpError(400, 'El nombre de usuario no puede superar los 60 caracteres');
+  return nombre;
+}
+
+function parseRolUsuario(raw) {
+  const rol = String(raw ?? '');
+  if (!['admin', 'empleado'].includes(rol)) {
+    throw httpError(400, 'El rol debe ser Admin o Empleado');
+  }
+  return rol;
+}
+
+function parsePasswordUsuario(body, obligatoria = true) {
+  const password = String(body?.password ?? '');
+  const confirmar = String(body?.confirmarPassword ?? '');
+  if (!password && !obligatoria && !confirmar) return null;
+  if (!password) throw httpError(400, 'La contraseña es obligatoria');
+  if (password !== confirmar) throw httpError(400, 'Las contraseñas no coinciden');
+  return password;
+}
+
+function usuarioPublico(fila) {
+  return { id: fila.id, nombre: fila.nombre, rol: fila.rol, creadoEn: fila.creado_en };
+}
+
+function nombreUsuarioCaja(id) {
+  if (id === null || id === undefined) return 'Sin registro';
+  return db.prepare('SELECT nombre FROM usuarios WHERE id = ?').get(id)?.nombre ?? 'Usuario eliminado';
+}
+
+function autenticar(req, _res, next) {
+  const cabecera = String(req.headers.authorization ?? '');
+  const token = cabecera.startsWith('Bearer ') ? cabecera.slice(7) : '';
+  const datos = verificarToken(token);
+  if (!datos) return next(httpError(401, 'Sesión expirada. Iniciá sesión nuevamente.'));
+
+  const usuario = db.prepare('SELECT id, nombre, rol FROM usuarios WHERE id = ?').get(datos.id);
+  if (!usuario) return next(httpError(401, 'Usuario no disponible. Iniciá sesión nuevamente.'));
+
+  req.usuario = usuario;
+  next();
+}
+
+function soloAdmin(req, _res, next) {
+  if (req.usuario?.rol !== 'admin') {
+    return next(httpError(403, 'No tenés permisos para realizar esta acción'));
+  }
+  next();
 }
 
 function localDay(date = new Date()) {
@@ -43,20 +102,22 @@ function validarCategoria(nombre) {
     .prepare('SELECT nombre FROM categorias WHERE nombre = ? COLLATE NOCASE')
     .get(nombre);
   if (!categoria) {
-    throw httpError(400, 'La categoría no existe. Creala primero en la sección Categorías');
+    throw httpError(400, 'La categoría no existe. Creala primero en la sección Agregar productos');
   }
   return categoria.nombre;
 }
 
-function parseProducto(body, activoPorDefecto = 1) {
+function parseProducto(body, activoPorDefecto = 1, stockMinimoPorDefecto = STOCK_BAJO_LIMITE) {
   const nombre = String(body?.nombre ?? '').trim();
   const categoria = parseCategoriaNombre(body?.categoria);
   const precioRaw = body?.precio;
   const cantidadRaw = body?.cantidad;
+  const stockMinimoRaw = body?.stock_minimo;
   const codigo = String(body?.codigo_barras ?? '').trim();
   const imagen = typeof body?.imagen === 'string' && body.imagen.startsWith('data:image/') ? body.imagen : null;
   const activoRaw = body?.activo;
   let activo = activoPorDefecto ? 1 : 0;
+  let stockMinimo = stockMinimoPorDefecto;
 
   if (activoRaw !== undefined && activoRaw !== null) {
     if (typeof activoRaw === 'boolean') {
@@ -87,6 +148,17 @@ function parseProducto(body, activoPorDefecto = 1) {
     throw httpError(400, 'La cantidad debe ser un número entero mayor o igual a 0');
   }
 
+  if (
+    stockMinimoRaw !== undefined &&
+    stockMinimoRaw !== null &&
+    stockMinimoRaw !== ''
+  ) {
+    stockMinimo = Number(stockMinimoRaw);
+    if (!Number.isInteger(stockMinimo) || stockMinimo < 0) {
+      throw httpError(400, 'El stock mínimo debe ser un número entero mayor o igual a 0');
+    }
+  }
+
   if (codigo.length > 60) throw httpError(400, 'El código de barra no puede superar los 60 caracteres');
   if (imagen && imagen.length > 4_500_000) {
     throw httpError(400, 'La imagen es demasiado grande (máximo aproximado 3 MB)');
@@ -97,6 +169,7 @@ function parseProducto(body, activoPorDefecto = 1) {
     categoria: validarCategoria(categoria),
     precio: round2(precio),
     cantidad,
+    stock_minimo: stockMinimo,
     codigo_barras: codigo || null,
     imagen,
     activo,
@@ -119,6 +192,15 @@ function parseMotivo(raw, etiqueta = 'motivo') {
   if (!motivo) throw httpError(400, `Indicá el ${etiqueta}`);
   if (motivo.length > 200) throw httpError(400, `El ${etiqueta} no puede superar los 200 caracteres`);
   return motivo;
+}
+
+function parseCliente(raw) {
+  const cliente = String(raw ?? '').trim();
+  if (!cliente) return null;
+  if (cliente.length > 120) {
+    throw httpError(400, 'El nombre del comprador no puede superar los 120 caracteres');
+  }
+  return cliente;
 }
 
 function registrarMovimientoStock({
@@ -215,6 +297,8 @@ function cajaAObjeto(fila) {
     montoCierre: fila.monto_cierre,
     fechaApertura: fila.fecha_apertura,
     fechaCierre: fila.fecha_cierre,
+    abiertoPor: nombreUsuarioCaja(fila.abierto_por),
+    cerradoPor: nombreUsuarioCaja(fila.cerrado_por),
   };
 }
 
@@ -290,6 +374,116 @@ function estadoCaja(dia = localDay()) {
   };
 }
 
+app.post('/api/login', (req, res, next) => {
+  try {
+    const nombre = String(req.body?.usuario ?? '').trim();
+    const password = String(req.body?.password ?? '');
+    if (!nombre || !password) throw httpError(400, 'Ingresá usuario y contraseña');
+
+    const usuario = db
+      .prepare('SELECT * FROM usuarios WHERE nombre = ? COLLATE NOCASE')
+      .get(nombre);
+    if (!usuario || !verificarPassword(password, usuario.password_hash)) {
+      throw httpError(401, 'Usuario o contraseña incorrectos');
+    }
+
+    res.json({ token: crearToken(usuario), usuario: usuarioPublico(usuario) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use('/api', autenticar);
+
+app.get('/api/sesion', (req, res) => {
+  res.json({ usuario: req.usuario });
+});
+
+app.get('/api/usuarios', soloAdmin, (_req, res) => {
+  const usuarios = db
+    .prepare('SELECT id, nombre, rol, creado_en FROM usuarios ORDER BY nombre COLLATE NOCASE ASC')
+    .all()
+    .map(usuarioPublico);
+  res.json({ usuarios });
+});
+
+app.post('/api/usuarios', soloAdmin, (req, res, next) => {
+  try {
+    const nombre = parseNombreUsuario(req.body?.nombre);
+    const rol = parseRolUsuario(req.body?.rol);
+    const password = parsePasswordUsuario(req.body, true);
+
+    let info;
+    try {
+      info = db
+        .prepare('INSERT INTO usuarios (nombre, password_hash, rol) VALUES (?, ?, ?)')
+        .run(nombre, hashPassword(password), rol);
+    } catch (error) {
+      if (String(error.message).includes('UNIQUE constraint failed')) {
+        throw httpError(409, 'Ya existe un usuario con ese nombre');
+      }
+      throw error;
+    }
+
+    const creado = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(Number(info.lastInsertRowid));
+    res.status(201).json(usuarioPublico(creado));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/usuarios/:id', soloAdmin, (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
+
+    const existente = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id);
+    if (!existente) throw httpError(404, 'Usuario no encontrado');
+
+    const nombre = parseNombreUsuario(req.body?.nombre);
+    const rol = parseRolUsuario(req.body?.rol);
+    const password = parsePasswordUsuario(req.body, false);
+
+    try {
+      if (password) {
+        db.prepare('UPDATE usuarios SET nombre = ?, rol = ?, password_hash = ? WHERE id = ?').run(
+          nombre,
+          rol,
+          hashPassword(password),
+          id
+        );
+      } else {
+        db.prepare('UPDATE usuarios SET nombre = ?, rol = ? WHERE id = ?').run(nombre, rol, id);
+      }
+    } catch (error) {
+      if (String(error.message).includes('UNIQUE constraint failed')) {
+        throw httpError(409, 'Ya existe un usuario con ese nombre');
+      }
+      throw error;
+    }
+
+    res.json(usuarioPublico(db.prepare('SELECT * FROM usuarios WHERE id = ?').get(id)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/usuarios/:id', soloAdmin, (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
+    if (id === req.usuario.id) {
+      throw httpError(400, 'No podés eliminar tu propio usuario');
+    }
+
+    const info = db.prepare('DELETE FROM usuarios WHERE id = ?').run(id);
+    if (info.changes === 0) throw httpError(404, 'Usuario no encontrado');
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/productos', (req, res) => {
   const busqueda = String(req.query.busqueda ?? '').trim();
   const categoria = String(req.query.categoria ?? '').trim();
@@ -318,12 +512,12 @@ app.get('/api/productos/stock-bajo', (_req, res) => {
   const productos = db
     .prepare(
       `SELECT * FROM productos
-       WHERE cantidad < ? AND activo = 1
+       WHERE cantidad < stock_minimo AND activo = 1
        ORDER BY cantidad ASC, nombre COLLATE NOCASE ASC`
     )
-    .all(STOCK_BAJO_LIMITE);
+    .all();
 
-  res.json({ limite: STOCK_BAJO_LIMITE, productos });
+  res.json({ productos });
 });
 
 app.get('/api/productos/buscar-codigo', (req, res, next) => {
@@ -340,7 +534,7 @@ app.get('/api/productos/buscar-codigo', (req, res, next) => {
   }
 });
 
-app.get('/api/movimientos-stock', (req, res, next) => {
+app.get('/api/movimientos-stock', soloAdmin, (req, res, next) => {
   try {
     const productoIdRaw = String(req.query.productoId ?? '').trim();
     let productoId = null;
@@ -400,8 +594,10 @@ app.post('/api/caja/abrir', (req, res, next) => {
 
     const montoApertura = parseMonto(req.body?.montoApertura, 'monto de apertura');
     db.prepare(
-      'INSERT INTO cajas (dia, monto_apertura, monto_cierre, fecha_apertura, fecha_cierre) VALUES (?, ?, NULL, ?, NULL)'
-    ).run(dia, montoApertura, new Date().toISOString());
+      `INSERT INTO cajas
+         (dia, monto_apertura, monto_cierre, fecha_apertura, fecha_cierre, abierto_por)
+       VALUES (?, ?, NULL, ?, NULL, ?)`
+    ).run(dia, montoApertura, new Date().toISOString(), req.usuario.id);
 
     res.status(201).json(estadoCaja(dia));
   } catch (error) {
@@ -447,11 +643,9 @@ app.post('/api/caja/cerrar', (req, res, next) => {
     if (!caja) throw httpError(409, 'No hay una caja abierta para cerrar');
 
     const montoCierre = parseMonto(req.body?.montoCierre, 'monto de cierre');
-    db.prepare('UPDATE cajas SET monto_cierre = ?, fecha_cierre = ? WHERE id = ?').run(
-      montoCierre,
-      new Date().toISOString(),
-      caja.id
-    );
+    db.prepare(
+      'UPDATE cajas SET monto_cierre = ?, fecha_cierre = ?, cerrado_por = ? WHERE id = ?'
+    ).run(montoCierre, new Date().toISOString(), req.usuario.id, caja.id);
 
     res.json(estadoCaja(dia));
   } catch (error) {
@@ -472,7 +666,7 @@ app.get('/api/categorias', (_req, res) => {
   res.json(categorias);
 });
 
-app.post('/api/categorias', (req, res, next) => {
+app.post('/api/categorias', soloAdmin, (req, res, next) => {
   try {
     const nombre = parseCategoriaNombre(req.body?.nombre);
     let info;
@@ -491,7 +685,7 @@ app.post('/api/categorias', (req, res, next) => {
   }
 });
 
-app.put('/api/categorias/:id', (req, res, next) => {
+app.put('/api/categorias/:id', soloAdmin, (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -530,7 +724,7 @@ app.put('/api/categorias/:id', (req, res, next) => {
   }
 });
 
-app.delete('/api/categorias/:id', (req, res, next) => {
+app.delete('/api/categorias/:id', soloAdmin, (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -556,21 +750,23 @@ app.delete('/api/categorias/:id', (req, res, next) => {
   }
 });
 
-app.post('/api/productos', (req, res, next) => {
+app.post('/api/productos', soloAdmin, (req, res, next) => {
   try {
     const producto = parseProducto(req.body);
     let info;
     try {
       info = db
         .prepare(
-          `INSERT INTO productos (nombre, categoria, precio, cantidad, imagen, codigo_barras, activo)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO productos
+             (nombre, categoria, precio, cantidad, stock_minimo, imagen, codigo_barras, activo)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           producto.nombre,
           producto.categoria,
           producto.precio,
           producto.cantidad,
+          producto.stock_minimo,
           producto.imagen,
           producto.codigo_barras,
           producto.activo
@@ -599,7 +795,7 @@ app.post('/api/productos', (req, res, next) => {
   }
 });
 
-app.put('/api/productos/:id', (req, res, next) => {
+app.put('/api/productos/:id', soloAdmin, (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -607,7 +803,7 @@ app.put('/api/productos/:id', (req, res, next) => {
     const existente = db.prepare('SELECT * FROM productos WHERE id = ?').get(id);
     if (!existente) throw httpError(404, 'Producto no encontrado');
 
-    const producto = parseProducto(req.body, existente.activo);
+    const producto = parseProducto(req.body, existente.activo, existente.stock_minimo);
     const cambioStock = producto.cantidad !== existente.cantidad;
     const motivoStock = cambioStock
       ? parseMotivo(req.body?.motivoStock, 'motivo del movimiento de stock')
@@ -617,13 +813,15 @@ app.put('/api/productos/:id', (req, res, next) => {
     try {
       db.prepare(
         `UPDATE productos
-         SET nombre = ?, categoria = ?, precio = ?, cantidad = ?, imagen = ?, codigo_barras = ?, activo = ?
+         SET nombre = ?, categoria = ?, precio = ?, cantidad = ?, stock_minimo = ?,
+             imagen = ?, codigo_barras = ?, activo = ?
          WHERE id = ?`
       ).run(
         producto.nombre,
         producto.categoria,
         producto.precio,
         producto.cantidad,
+        producto.stock_minimo,
         producto.imagen,
         producto.codigo_barras,
         producto.activo,
@@ -656,7 +854,7 @@ app.put('/api/productos/:id', (req, res, next) => {
   }
 });
 
-app.delete('/api/productos/:id', (req, res, next) => {
+app.delete('/api/productos/:id', soloAdmin, (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -808,7 +1006,7 @@ function parsePagoCon(metodoPago, pagoRaw, total) {
   return { pagoCon: round2(pagoCon), vuelto: round2(pagoCon - total) };
 }
 
-app.get('/api/ventas', (req, res, next) => {
+app.get('/api/ventas', soloAdmin, (req, res, next) => {
   try {
     const { periodo, valor, where, params } = parsePeriodoVentas(req.query);
 
@@ -820,6 +1018,7 @@ app.get('/api/ventas', (req, res, next) => {
         fecha: fila.fecha,
         dia: fila.dia,
         metodoPago: fila.metodo_pago,
+        cliente: fila.cliente ?? null,
         subtotal: round2(items.reduce((suma, item) => suma + item.subtotal, 0)),
         descuento: round2(fila.descuento ?? 0),
         descuentoTipo: fila.descuento_tipo ?? null,
@@ -936,17 +1135,20 @@ app.post('/api/ventas', (req, res, next) => {
       );
       const total = round2(subtotal - descuento);
       const { pagoCon, vuelto } = parsePagoCon(metodoPago, req.body?.pagoCon, total);
+      const cliente = parseCliente(req.body?.cliente);
       const fecha = new Date();
       const info = db
         .prepare(
           `INSERT INTO ventas
-             (fecha, dia, metodo_pago, total, descuento, descuento_tipo, descuento_valor, pago_con, vuelto, resumen)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             (fecha, dia, metodo_pago, cliente, total, descuento, descuento_tipo,
+              descuento_valor, pago_con, vuelto, resumen)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           fecha.toISOString(),
           dia,
           metodoPago,
+          cliente,
           total,
           descuento,
           descuentoTipo,
@@ -973,6 +1175,7 @@ app.post('/api/ventas', (req, res, next) => {
         fecha: fecha.toISOString(),
         dia,
         metodoPago,
+        cliente,
         subtotal,
         descuento,
         descuentoTipo,
@@ -991,7 +1194,7 @@ app.post('/api/ventas', (req, res, next) => {
   }
 });
 
-app.put('/api/ventas/:id', (req, res, next) => {
+app.put('/api/ventas/:id', soloAdmin, (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -1007,6 +1210,8 @@ app.put('/api/ventas/:id', (req, res, next) => {
     const valorRaw =
       req.body?.descuentoValor !== undefined ? req.body.descuentoValor : existente.descuento_valor;
     const pagoRaw = req.body?.pagoCon !== undefined ? req.body.pagoCon : existente.pago_con;
+    const clienteRaw = req.body?.cliente !== undefined ? req.body.cliente : existente.cliente;
+    const cliente = parseCliente(clienteRaw);
 
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -1040,11 +1245,12 @@ app.put('/api/ventas/:id', (req, res, next) => {
 
       db.prepare(
         `UPDATE ventas
-         SET metodo_pago = ?, total = ?, descuento = ?, descuento_tipo = ?, descuento_valor = ?,
-             pago_con = ?, vuelto = ?, resumen = ?
+         SET metodo_pago = ?, cliente = ?, total = ?, descuento = ?, descuento_tipo = ?,
+             descuento_valor = ?, pago_con = ?, vuelto = ?, resumen = ?
          WHERE id = ?`
       ).run(
         metodoPago,
+        cliente,
         total,
         descuento,
         descuentoTipo,
@@ -1077,6 +1283,7 @@ app.put('/api/ventas/:id', (req, res, next) => {
         fecha: existente.fecha,
         dia: existente.dia,
         metodoPago,
+        cliente,
         subtotal,
         descuento,
         descuentoTipo,
@@ -1095,7 +1302,7 @@ app.put('/api/ventas/:id', (req, res, next) => {
   }
 });
 
-app.get('/api/exportar', (_req, res, next) => {
+app.get('/api/exportar', soloAdmin, (_req, res, next) => {
   const tmpFile = path.join(os.tmpdir(), `almacen-export-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   try {
     db.exec(`VACUUM INTO '${tmpFile.replace(/'/g, "''")}'`);

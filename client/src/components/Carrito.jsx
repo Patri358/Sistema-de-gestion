@@ -27,6 +27,7 @@ export default function Carrito({
   const [descuentoTipo, setDescuentoTipo] = useState('porcentaje');
   const [descuentoValor, setDescuentoValor] = useState('');
   const [pagoCon, setPagoCon] = useState('');
+  const [cliente, setCliente] = useState('');
 
   const subtotal = carrito.reduce((suma, item) => suma + item.producto.precio * item.cantidad, 0);
   const unidades = carrito.reduce((suma, item) => suma + item.cantidad, 0);
@@ -45,6 +46,7 @@ export default function Carrito({
     if (vacio) {
       setDescuentoValor('');
       setPagoCon('');
+      setCliente('');
     }
   }, [vacio]);
 
@@ -59,6 +61,7 @@ export default function Carrito({
         metodoPago === 'Efectivo' && pagoConCargado && Number.isFinite(pagoConNumero)
           ? pagoConNumero
           : null,
+      cliente: cliente.trim() || null,
     });
   }
 
@@ -207,6 +210,20 @@ export default function Carrito({
             <div className="summary-total">
               <span>Total</span>
               <strong>{formatARS(total)}</strong>
+            </div>
+
+            <div className="field">
+              <label htmlFor="cliente-venta">
+                Nombre del comprador <span className="optional-tag">opcional</span>
+              </label>
+              <input
+                id="cliente-venta"
+                type="text"
+                maxLength={120}
+                value={cliente}
+                placeholder="Ej: Juan Pérez"
+                onChange={(e) => setCliente(e.target.value)}
+              />
             </div>
 
             <div className="field">

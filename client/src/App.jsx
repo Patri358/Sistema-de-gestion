@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from './api.js';
+import { api, guardarToken, limpiarToken, leerToken } from './api.js';
+import Login from './components/Login.jsx';
 import Inventario from './components/Inventario.jsx';
 import Carrito from './components/Carrito.jsx';
 import Ventas from './components/Ventas.jsx';
@@ -8,6 +9,7 @@ import StockBajo from './components/StockBajo.jsx';
 import Caja from './components/Caja.jsx';
 import AbrirCajaModal from './components/AbrirCajaModal.jsx';
 import MovimientosStock from './components/MovimientosStock.jsx';
+import ConfiguracionModal from './components/ConfiguracionModal.jsx';
 import {
   IconAlert,
   IconBox,
@@ -15,6 +17,7 @@ import {
   IconDownload,
   IconHistory,
   IconReceipt,
+  IconSettings,
   IconStore,
   IconTag,
   IconWallet,
@@ -28,14 +31,14 @@ const TABS = [
   { id: 'movimientos', etiqueta: 'Movimientos', Icono: IconHistory },
   { id: 'ventas', etiqueta: 'Ventas', Icono: IconReceipt },
   { id: 'caja', etiqueta: 'Caja', Icono: IconWallet },
-  { id: 'categorias', etiqueta: 'Categorías', Icono: IconTag },
+  { id: 'categorias', etiqueta: 'Agregar productos', Icono: IconTag },
 ];
 
 export default function App() {
   const [tab, setTab] = useState('inventario');
   const [productos, setProductos] = useState([]);
   const [categorias, setCategorias] = useState([]);
-  const [stockBajo, setStockBajo] = useState({ limite: 10, productos: [] });
+  const [stockBajo, setStockBajo] = useState({ productos: [] });
   const [cargandoStockBajo, setCargandoStockBajo] = useState(true);
   const [caja, setCaja] = useState(null);
   const [cargandoCaja, setCargandoCaja] = useState(true);
@@ -49,10 +52,75 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [toast, setToast] = useState(null);
   const [comprando, setComprando] = useState(false);
+  const [mostrarConfiguracion, setMostrarConfiguracion] = useState(false);
+  const [sesion, setSesion] = useState(null);
+  const [verificandoSesion, setVerificandoSesion] = useState(() => Boolean(leerToken()));
+  const [usuarios, setUsuarios] = useState([]);
+  const [cargandoUsuarios, setCargandoUsuarios] = useState(false);
+  const [modoOscuro, setModoOscuro] = useState(() => {
+    try {
+      const guardado = localStorage.getItem('cstore-tema');
+      if (guardado === 'dark' || guardado === 'light') return guardado === 'dark';
+      return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+    } catch {
+      return false;
+    }
+  });
 
   const notify = useCallback((mensaje, tipo = 'success') => {
     setToast({ mensaje, tipo, id: Date.now() });
   }, []);
+
+  const esAdmin = sesion?.rol === 'admin';
+  const tabsVisibles = TABS.filter(
+    ({ id }) => esAdmin || ['inventario', 'stock-bajo', 'caja'].includes(id)
+  );
+
+  useEffect(() => {
+    if (!leerToken()) {
+      setVerificandoSesion(false);
+      return undefined;
+    }
+
+    let cancelado = false;
+    api
+      .getSesion()
+      .then((datos) => {
+        if (!cancelado) setSesion(datos.usuario);
+      })
+      .catch(() => {
+        if (!cancelado) limpiarToken();
+      })
+      .finally(() => {
+        if (!cancelado) setVerificandoSesion(false);
+      });
+
+    return () => {
+      cancelado = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    function finalizarSesion() {
+      limpiarToken();
+      setSesion(null);
+      setCarrito([]);
+      setMostrarConfiguracion(false);
+      setMostrarApertura(false);
+    }
+
+    window.addEventListener('sesion-expirada', finalizarSesion);
+    return () => window.removeEventListener('sesion-expirada', finalizarSesion);
+  }, []);
+
+  useEffect(() => {
+    if (!sesion) return;
+    if (!tabsVisibles.some(({ id }) => id === tab)) setTab('inventario');
+  }, [sesion, esAdmin, tab]);
+
+  useEffect(() => {
+    if (mostrarConfiguracion && esAdmin) cargarUsuarios();
+  }, [mostrarConfiguracion, esAdmin]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -61,6 +129,15 @@ export default function App() {
   }, [toast]);
 
   useEffect(() => {
+    const tema = modoOscuro ? 'dark' : 'light';
+    document.documentElement.dataset.theme = tema;
+    try {
+      localStorage.setItem('cstore-tema', tema);
+    } catch {}
+  }, [modoOscuro]);
+
+  useEffect(() => {
+    if (!sesion) return undefined;
     let cancelado = false;
     const timer = setTimeout(() => {
       setCargando(true);
@@ -81,9 +158,10 @@ export default function App() {
       cancelado = true;
       clearTimeout(timer);
     };
-  }, [filtros.busqueda, filtros.categoria, refreshKey, notify]);
+  }, [filtros.busqueda, filtros.categoria, refreshKey, notify, sesion]);
 
   useEffect(() => {
+    if (!sesion) return undefined;
     let cancelado = false;
     api
       .getCategorias()
@@ -96,9 +174,10 @@ export default function App() {
     return () => {
       cancelado = true;
     };
-  }, [refreshKey, notify]);
+  }, [refreshKey, notify, sesion]);
 
   useEffect(() => {
+    if (!sesion) return undefined;
     let cancelado = false;
     setCargandoStockBajo(true);
     api
@@ -116,9 +195,10 @@ export default function App() {
     return () => {
       cancelado = true;
     };
-  }, [refreshKey, notify]);
+  }, [refreshKey, notify, sesion]);
 
   useEffect(() => {
+    if (!sesion) return undefined;
     let cancelado = false;
     const solicitud = cajaSolicitud.current + 1;
     cajaSolicitud.current = solicitud;
@@ -143,7 +223,7 @@ export default function App() {
     return () => {
       cancelado = true;
     };
-  }, [refreshKey, notify]);
+  }, [refreshKey, notify, sesion]);
 
   useEffect(() => {
     function revisarCambioDeDia() {
@@ -328,6 +408,65 @@ export default function App() {
     return actualizada;
   }
 
+  async function cargarUsuarios() {
+    setCargandoUsuarios(true);
+    try {
+      const datos = await api.getUsuarios();
+      setUsuarios(datos.usuarios);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setCargandoUsuarios(false);
+    }
+  }
+
+  async function crearUsuario(datos) {
+    const creado = await api.crearUsuario(datos);
+    await cargarUsuarios();
+    notify(`Usuario "${creado.nombre}" creado como ${creado.rol === 'admin' ? 'Admin' : 'Empleado'}`);
+    return creado;
+  }
+
+  async function actualizarUsuario(id, datos) {
+    const actualizado = await api.actualizarUsuario(id, datos);
+    if (id === sesion?.id) setSesion(actualizado);
+    await cargarUsuarios();
+    notify(`Usuario "${actualizado.nombre}" actualizado`);
+    return actualizado;
+  }
+
+  async function eliminarUsuario(id) {
+    await api.eliminarUsuario(id);
+    await cargarUsuarios();
+    notify('Usuario eliminado');
+  }
+
+  async function descargarBase() {
+    try {
+      await api.descargarBase();
+      notify('Base de datos descargada');
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+  }
+
+  async function iniciarSesion(usuario, password) {
+    const datos = await api.login(usuario, password);
+    guardarToken(datos.token);
+    setSesion(datos.usuario);
+    setTab('inventario');
+    setCarrito([]);
+    setRefreshKey((valor) => valor + 1);
+  }
+
+  function cerrarSesion() {
+    limpiarToken();
+    setSesion(null);
+    setCarrito([]);
+    setMostrarConfiguracion(false);
+    setMostrarApertura(false);
+  }
+
   async function confirmarVenta(metodoPago, opciones = {}) {
     if (!caja?.abierta) {
       notify(
@@ -348,13 +487,25 @@ export default function App() {
       );
       setCarrito([]);
       setRefreshKey((valor) => valor + 1);
-      setTab('ventas');
+      setTab(esAdmin ? 'ventas' : 'caja');
       notify(`Venta #${venta.id} registrada por ${formatARS(venta.total)}`);
     } catch (err) {
       notify(err.message, 'error');
     } finally {
       setComprando(false);
     }
+  }
+
+  if (verificandoSesion) {
+    return (
+      <div className="login-page">
+        <div className="login-card login-cargando">Verificando sesión...</div>
+      </div>
+    );
+  }
+
+  if (!sesion) {
+    return <Login onIngresar={iniciarSesion} />;
   }
 
   return (
@@ -371,13 +522,13 @@ export default function App() {
               <IconStore size={22} />
             </span>
             <span className="brand-text">
-              <strong>Almacén Nona Nene</strong>
+              <strong>C-Store POS</strong>
               <small>Gestión de inventario</small>
             </span>
           </button>
 
           <nav className="tabs" aria-label="Secciones del sistema">
-            {TABS.map(({ id, etiqueta, Icono }) => (
+            {tabsVisibles.map(({ id, etiqueta, Icono }) => (
               <button
                 key={id}
                 type="button"
@@ -400,14 +551,21 @@ export default function App() {
           </nav>
 
           <div className="header-actions">
-            <a
-              className="btn btn-secondary btn-sm"
-              href={api.exportarDbUrl}
-              title="Descargar el archivo SQLite completo"
-            >
-              <IconDownload size={16} />
-              <span className="hide-sm">Descargar base</span>
-            </a>
+            <span className="header-usuario" title={`Rol: ${esAdmin ? 'Admin' : 'Empleado'}`}>
+              <strong>{sesion.nombre}</strong>
+              <small>{esAdmin ? 'Admin' : 'Empleado'}</small>
+            </span>
+            {esAdmin && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={descargarBase}
+                title="Descargar el archivo SQLite completo"
+              >
+                <IconDownload size={16} />
+                <span className="hide-sm">Descargar base</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -425,7 +583,8 @@ export default function App() {
               onAgregar={agregarAlCarrito}
               onEditar={editarProducto}
               onEliminar={eliminarProducto}
-              onIrACategorias={() => setTab('categorias')}
+              onIrACategorias={esAdmin ? () => setTab('categorias') : undefined}
+              puedeEditar={esAdmin}
             />
             <Carrito
               carrito={carrito}
@@ -448,6 +607,7 @@ export default function App() {
             categorias={categorias}
             onEditar={editarProducto}
             onIrAInventario={() => setTab('inventario')}
+            puedeEditar={esAdmin}
           />
         )}
 
@@ -477,6 +637,16 @@ export default function App() {
         )}
       </main>
 
+      <button
+        type="button"
+        className="settings-fab"
+        title="Configuración"
+        aria-label="Abrir configuración"
+        onClick={() => setMostrarConfiguracion(true)}
+      >
+        <IconSettings size={22} />
+      </button>
+
       <footer className="app-footer">
         <span>Datos guardados localmente en SQLite</span>
         <span className="dot">·</span>
@@ -488,6 +658,22 @@ export default function App() {
           sugerencia={caja?.sugerenciaApertura ?? 0}
           onAbrir={abrirCaja}
           onCerrar={() => setMostrarApertura(false)}
+        />
+      )}
+
+      {mostrarConfiguracion && (
+        <ConfiguracionModal
+          modoOscuro={modoOscuro}
+          onCambiarModo={setModoOscuro}
+          esAdmin={esAdmin}
+          usuarioActual={sesion}
+          usuarios={usuarios}
+          cargandoUsuarios={cargandoUsuarios}
+          onCreate={crearUsuario}
+          onUpdate={actualizarUsuario}
+          onDelete={eliminarUsuario}
+          onCerrarSesion={cerrarSesion}
+          onCerrar={() => setMostrarConfiguracion(false)}
         />
       )}
 

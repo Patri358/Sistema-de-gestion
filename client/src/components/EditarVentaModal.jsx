@@ -14,6 +14,7 @@ import { api } from '../api.js';
 
 export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
   const [metodoPago, setMetodoPago] = useState(venta.metodoPago);
+  const [cliente, setCliente] = useState(venta.cliente || '');
   const [items, setItems] = useState(() =>
     venta.items.map((item) => ({
       productoId: item.productoId,
@@ -152,6 +153,7 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
             metodoPago === 'Efectivo' && pagoCon.trim() !== '' && Number.isFinite(Number(pagoCon))
               ? Number(pagoCon)
               : null,
+          cliente: cliente.trim() || null,
         }
       );
       onCerrar();
@@ -339,6 +341,20 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
             <span>Total actualizado</span>
             <strong>{formatARS(total)}</strong>
           </div>
+        </div>
+
+        <div className="field">
+          <label htmlFor="editar-cliente-venta">
+            Nombre del comprador <span className="optional-tag">opcional</span>
+          </label>
+          <input
+            id="editar-cliente-venta"
+            type="text"
+            maxLength={120}
+            value={cliente}
+            placeholder="Ej: Juan Pérez"
+            onChange={(e) => setCliente(e.target.value)}
+          />
         </div>
 
         <div className="field">
