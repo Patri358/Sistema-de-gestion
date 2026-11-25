@@ -228,7 +228,20 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
           <div className="ventas-lista">
             {datos.ventas.map((venta) => {
               const abierta = ventaAbierta === venta.id;
-              const unidadesVenta = venta.items.reduce((suma, item) => suma + item.cantidad, 0);
+              const unidadesVenta = venta.items.reduce(
+                (suma, item) => suma + (item.tipo === 'peso' ? 0 : item.cantidad),
+                0
+              );
+              const gramosVenta = venta.items.reduce(
+                (suma, item) => suma + (item.tipo === 'peso' ? item.cantidad : 0),
+                0
+              );
+              const etiquetaVenta = [
+                unidadesVenta ? `${unidadesVenta} u.` : '',
+                gramosVenta ? `${gramosVenta} g` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ');
               return (
                 <div key={venta.id} className={`venta ${abierta ? 'abierta' : ''}`}>
                   <button
@@ -247,7 +260,7 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
                       {venta.cliente && <small className="venta-cliente">{venta.cliente}</small>}
                     </span>
                     <span className="chip chip-pago">{venta.metodoPago}</span>
-                    <span className="venta-unidades">{unidadesVenta} u.</span>
+                    <span className="venta-unidades">{etiquetaVenta}</span>
                     <strong>{formatARS(venta.total)}</strong>
                     <IconChevron size={18} className={abierta ? 'rotado' : ''} />
                   </button>
@@ -270,8 +283,13 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
                                 <span className="detalle-nombre">{item.nombre}</span>
                                 <span className="detalle-categoria">{item.categoria}</span>
                               </td>
-                              <td>{item.cantidad}</td>
-                              <td>{formatARS(item.precio)}</td>
+                              <td>
+                                {item.tipo === 'peso' ? `${item.cantidad} g` : item.cantidad}
+                              </td>
+                              <td>
+                                {formatARS(item.precio)}
+                                {item.tipo === 'peso' ? ' / g' : ''}
+                              </td>
                               <td>
                                 <strong>{formatARS(item.subtotal)}</strong>
                               </td>
@@ -357,8 +375,9 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
       <div className="backup-note">
         <IconDownload size={16} />
         <span>
-          Para mover los datos a otra PC usá <strong>Descargar base</strong> y copiá el archivo
-          <code>almacen.db</code> en la carpeta <code>server/data</code> del otro equipo.
+          Para mover los datos a otra PC usá <strong>Descargar base</strong> desde Configuración y
+          copiá el archivo <code>almacen.db</code> en la carpeta <code>server/data</code> del otro
+          equipo.
         </span>
       </div>
     </div>

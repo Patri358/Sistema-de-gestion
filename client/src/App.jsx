@@ -5,26 +5,37 @@ import Login from './components/Login.jsx';
 import Inventario from './components/Inventario.jsx';
 import Carrito from './components/Carrito.jsx';
 import Ventas from './components/Ventas.jsx';
-import Categorias from './components/Categorias.jsx';
+import Productos from './components/Categorias.jsx';
 import StockBajo from './components/StockBajo.jsx';
 import Caja from './components/Caja.jsx';
 import AbrirCajaModal from './components/AbrirCajaModal.jsx';
 import MovimientosStock from './components/MovimientosStock.jsx';
 import ConfiguracionModal from './components/ConfiguracionModal.jsx';
 import Clientes from './components/Clientes.jsx';
+import Proveedores from './components/Proveedores.jsx';
+import Vencimientos from './components/Vencimientos.jsx';
 import {
   IconAlert,
   IconBox,
-  IconDownload,
+  IconCalendar,
   IconHistory,
+  IconLogout,
   IconReceipt,
   IconSettings,
   IconStore,
   IconTag,
+  IconTruck,
   IconUsers,
   IconWallet,
 } from './components/Icons.jsx';
-import { formatARS, todayLocal } from './utils.js';
+import {
+  esProductoPeso,
+  formatARS,
+  normalizarProducto,
+  stockDisponible,
+  subtotalProducto,
+  todayLocal,
+} from './utils.js';
 
 const TABS = [
   { id: 'inventario', etiqueta: 'Inventario', Icono: IconBox },
@@ -33,12 +44,57 @@ const TABS = [
   { id: 'ventas', etiqueta: 'Ventas', Icono: IconReceipt },
   { id: 'clientes', etiqueta: 'Clientes', Icono: IconUsers },
   { id: 'caja', etiqueta: 'Caja', Icono: IconWallet },
-  { id: 'categorias', etiqueta: 'Agregar productos', Icono: IconTag },
+  { id: 'categorias', etiqueta: 'Productos', Icono: IconTag },
+  { id: 'proveedores', etiqueta: 'Proveedores', Icono: IconTruck },
+  { id: 'vencimientos', etiqueta: 'Vencimientos', Icono: IconCalendar },
 ];
+
+function fechaISO(fecha) {
+  const anio = fecha.getFullYear();
+  const mes = String(fecha.getMonth() + 1).padStart(2, '0');
+  const dia = String(fecha.getDate()).padStart(2, '0');
+  return `${anio}-${mes}-${dia}`;
+}
+
+function correspondeUnAvisoVencimiento(aviso, hoy) {
+  if (aviso === 'inicio_mes') return hoy.getDate() === 1;
+  if (aviso === 'inicio_semana') return (hoy.getDay() + 6) % 7 === 0;
+  return true;
+}
+
+function correspondeAvisoVencimiento(avisos, hoy) {
+  return avisos.some((aviso) => correspondeUnAvisoVencimiento(aviso, hoy));
+}
+
+function vencimientosParaAvisos(vencimientos, avisos, hoy) {
+  const rangos = avisos
+    .filter((aviso) => correspondeUnAvisoVencimiento(aviso, hoy))
+    .map((aviso) => rangoAvisoVencimiento(aviso, hoy));
+  return vencimientos.filter((item) =>
+    rangos.some((rango) => item.fecha >= rango.desde && item.fecha <= rango.hasta)
+  );
+}
+
+function rangoAvisoVencimiento(aviso, hoy) {
+  if (aviso === 'inicio_mes') {
+    const desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const hasta = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+    return { desde: fechaISO(desde), hasta: fechaISO(hasta) };
+  }
+  if (aviso === 'inicio_semana') {
+    const diaSemana = (hoy.getDay() + 6) % 7;
+    const desde = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - diaSemana);
+    const hasta = new Date(desde.getFullYear(), desde.getMonth(), desde.getDate() + 6);
+    return { desde: fechaISO(desde), hasta: fechaISO(hasta) };
+  }
+  const iso = fechaISO(hoy);
+  return { desde: iso, hasta: iso };
+}
 
 export default function App() {
   const [tab, setTab] = useState('inventario');
   const [productos, setProductos] = useState([]);
+  const [productosTodos, setProductosTodos] = useState([]);
   const [categorias, setCategorias] = useState([]);
   const [stockBajo, setStockBajo] = useState({ productos: [] });
   const [cargandoStockBajo, setCargandoStockBajo] = useState(true);
@@ -59,6 +115,10 @@ export default function App() {
   const [verificandoSesion, setVerificandoSesion] = useState(() => Boolean(leerToken()));
   const [usuarios, setUsuarios] = useState([]);
   const [cargandoUsuarios, setCargandoUsuarios] = useState(false);
+  const [configVencimientos, setConfigVencimientos] = useState({
+    avisos: ['dia'],
+    borrarStockCero: false,
+  });
   const [modoOscuro, setModoOscuro] = useState(() => {
     try {
       const guardado = localStorage.getItem('cstore-tema');
@@ -83,7 +143,9 @@ export default function App() {
 
   const esAdmin = sesion?.rol === 'admin';
   const tabsVisibles = TABS.filter(
-    ({ id }) => esAdmin || ['inventario', 'stock-bajo', 'caja', 'clientes'].includes(id)
+    ({ id }) =>
+      esAdmin ||
+      ['inventario', 'stock-bajo', 'caja', 'clientes', 'vencimientos'].includes(id)
   );
 
   useEffect(() => {
@@ -141,6 +203,63 @@ export default function App() {
   }, [mostrarConfiguracion, esAdmin]);
 
   useEffect(() => {
+    if (!sesion) return undefined;
+    let cancelado = false;
+    api
+      .getConfigVencimientos()
+      .then((datos) => {
+        if (!cancelado) setConfigVencimientos(datos);
+      })
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
+  }, [sesion]);
+
+  const avisosVencimientosKey = configVencimientos.avisos.join(',');
+
+  useEffect(() => {
+    if (!sesion) return undefined;
+    let cancelado = false;
+
+    async function revisarAvisos() {
+      const ahora = new Date();
+      const avisosActuales = configVencimientos.avisos;
+      if (!correspondeAvisoVencimiento(avisosActuales, ahora)) return;
+      const dia = todayLocal();
+      const claveAviso = `aviso-venc-${dia}-${[...avisosActuales].sort().join('-')}`;
+      if (sessionStorage.getItem(claveAviso)) return;
+
+      try {
+        const [config, vencimientos] = await Promise.all([
+          api.getConfigVencimientos(),
+          api.getVencimientos(),
+        ]);
+        if (cancelado) return;
+        if (!correspondeAvisoVencimiento(config.avisos, ahora)) return;
+        const proximos = vencimientosParaAvisos(vencimientos, config.avisos, ahora);
+        if (proximos.length === 0) return;
+        sessionStorage.setItem(claveAviso, '1');
+        const nombres = proximos.slice(0, 3).map((item) => item.producto).join(', ');
+        notify(
+          `Hay ${proximos.length} ${proximos.length === 1 ? 'producto por vencer' : 'productos por vencer'}: ${nombres}${proximos.length > 3 ? '...' : ''}`
+        );
+      } catch {
+        if (!cancelado) notify('No se pudieron cargar los avisos de vencimientos', 'error');
+      }
+    }
+
+    revisarAvisos();
+    const timer = setInterval(revisarAvisos, 60000);
+    window.addEventListener('focus', revisarAvisos);
+    return () => {
+      cancelado = true;
+      clearInterval(timer);
+      window.removeEventListener('focus', revisarAvisos);
+    };
+  }, [sesion, avisosVencimientosKey, notify]);
+
+  useEffect(() => {
     const tema = modoOscuro ? 'dark' : 'light';
     document.documentElement.dataset.theme = tema;
     try {
@@ -156,7 +275,7 @@ export default function App() {
       api
         .getProductos(filtros)
         .then((datos) => {
-          if (!cancelado) setProductos(datos);
+          if (!cancelado) setProductos(datos.map(normalizarProducto));
         })
         .catch((err) => {
           if (!cancelado) notify(err.message, 'error');
@@ -171,6 +290,22 @@ export default function App() {
       clearTimeout(timer);
     };
   }, [filtros.busqueda, filtros.categoria, refreshKey, notify, sesion]);
+
+  useEffect(() => {
+    if (!sesion) return undefined;
+    let cancelado = false;
+    api
+      .getProductos({})
+      .then((datos) => {
+        if (!cancelado) setProductosTodos(datos.map(normalizarProducto));
+      })
+      .catch((err) => {
+        if (!cancelado) notify(err.message, 'error');
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [refreshKey, notify, sesion]);
 
   useEffect(() => {
     if (!sesion) return undefined;
@@ -195,7 +330,12 @@ export default function App() {
     api
       .getStockBajo()
       .then((datos) => {
-        if (!cancelado) setStockBajo(datos);
+          if (!cancelado) {
+            setStockBajo({
+              ...datos,
+              productos: (datos.productos ?? []).map(normalizarProducto),
+            });
+          }
       })
       .catch((err) => {
         if (!cancelado) notify(err.message, 'error');
@@ -264,20 +404,25 @@ export default function App() {
   }, [categorias]);
 
   function agregarAlCarrito(producto, cantidadSolicitada = 1) {
-    if (Number(producto.activo) === 0) {
-      notify(`"${producto.nombre}" está deshabilitado y no se puede vender`, 'error');
-      return 0;
-    }
-    if (producto.cantidad <= 0) {
-      notify(`No hay stock disponible de "${producto.nombre}"`, 'error');
+    const normalizado = normalizarProducto(producto);
+    const peso = esProductoPeso(normalizado);
+    const etiqueta = peso ? 'g' : 'unidades';
+    if (Number(normalizado.activo) === 0) {
+      notify(`"${normalizado.nombre}" está deshabilitado y no se puede vender`, 'error');
       return 0;
     }
 
-    const existente = carrito.find((item) => item.producto.id === producto.id);
+    const totalDisponible = stockDisponible(normalizado);
+    if (totalDisponible <= 0) {
+      notify(`No hay stock disponible de "${normalizado.nombre}"`, 'error');
+      return 0;
+    }
+
+    const existente = carrito.find((item) => item.producto.id === normalizado.id);
     const enCarrito = existente?.cantidad ?? 0;
-    const disponible = producto.cantidad - enCarrito;
+    const disponible = totalDisponible - enCarrito;
     if (disponible <= 0) {
-      notify(`Ya agregaste todo el stock disponible de "${producto.nombre}"`, 'error');
+      notify(`Ya agregaste todo el stock disponible de "${normalizado.nombre}"`, 'error');
       return 0;
     }
 
@@ -285,20 +430,20 @@ export default function App() {
     const agregar = Math.min(solicitada, disponible);
 
     setCarrito((actual) => {
-      const item = actual.find(({ producto: actualProducto }) => actualProducto.id === producto.id);
+      const item = actual.find(({ producto: actualProducto }) => actualProducto.id === normalizado.id);
       if (item) {
         return actual.map((actualItem) =>
-          actualItem.producto.id === producto.id
+          actualItem.producto.id === normalizado.id
             ? { ...actualItem, cantidad: actualItem.cantidad + agregar }
             : actualItem
         );
       }
-      return [...actual, { producto, cantidad: agregar }];
+      return [...actual, { producto: normalizado, cantidad: agregar }];
     });
 
     if (agregar < solicitada) {
       notify(
-        `Solo quedaban ${disponible} unidades de "${producto.nombre}". Se agregaron ${agregar}.`,
+        `Solo quedaban ${disponible} ${etiqueta} de "${normalizado.nombre}". Se agregaron ${agregar}.`,
         'error'
       );
     }
@@ -310,8 +455,24 @@ export default function App() {
       actual.map((item) => {
         if (item.producto.id !== productoId) return item;
         const cantidad = Math.min(
-          item.producto.cantidad,
+          stockDisponible(item.producto),
           Math.max(1, item.cantidad + delta)
+        );
+        return { ...item, cantidad };
+      })
+    );
+  }
+
+  function fijarCantidad(productoId, valor) {
+    if (valor === '' || valor === null || valor === undefined) return;
+    const numero = Number(valor);
+    if (!Number.isFinite(numero)) return;
+    setCarrito((actual) =>
+      actual.map((item) => {
+        if (item.producto.id !== productoId) return item;
+        const cantidad = Math.min(
+          stockDisponible(item.producto),
+          Math.max(1, Math.floor(numero))
         );
         return { ...item, cantidad };
       })
@@ -327,15 +488,15 @@ export default function App() {
   }
 
   async function crearProducto(datos) {
-    const creado = await api.crearProducto(datos);
+    const creado = normalizarProducto(await api.crearProducto(datos));
     setRefreshKey((valor) => valor + 1);
     notify(`Producto ${creado.nombre} creado con exito`);
     return creado;
   }
 
   async function editarProducto(id, datos) {
-    const anterior = productos.find((producto) => producto.id === id);
-    const actualizado = await api.actualizarProducto(id, datos);
+    const anterior = productosTodos.find((producto) => producto.id === id);
+    const actualizado = normalizarProducto(await api.actualizarProducto(id, datos));
     setRefreshKey((valor) => valor + 1);
     setCarrito((actual) =>
       actual
@@ -343,11 +504,16 @@ export default function App() {
           item.producto.id === id
             ? {
                 producto: actualizado,
-                cantidad: Math.min(item.cantidad, actualizado.cantidad),
+                cantidad: Math.min(item.cantidad, stockDisponible(actualizado)),
               }
             : item
         )
-        .filter((item) => item.cantidad > 0 && Number(actualizado.activo) !== 0)
+        .filter(
+          (item) =>
+            item.cantidad > 0 &&
+            item.producto.tipo === actualizado.tipo &&
+            Number(actualizado.activo) !== 0
+        )
     );
     const cambioStock =
       anterior && Number(anterior.cantidad) !== Number(actualizado.cantidad);
@@ -359,8 +525,44 @@ export default function App() {
     return actualizado;
   }
 
+  async function alternarActivoProducto(id) {
+    const anterior = productosTodos.find((producto) => producto.id === id);
+    if (!anterior) return undefined;
+
+    const activo = Number(anterior.activo) === 0;
+    try {
+      const actualizado = normalizarProducto(
+        await api.actualizarProducto(id, {
+          nombre: anterior.nombre,
+          categoria: anterior.categoria,
+          precio: anterior.precio,
+          cantidad: anterior.cantidad,
+          stock_minimo: anterior.stock_minimo ?? 10,
+          codigo_barras: anterior.codigo_barras ?? '',
+          imagen: anterior.imagen ?? null,
+          activo,
+          tipo: anterior.tipo,
+          gramosPorUnidad: anterior.gramosPorUnidad ?? null,
+        })
+      );
+      setRefreshKey((valor) => valor + 1);
+      setCarrito((items) =>
+        items.filter((item) => item.producto.id !== id || activo)
+      );
+      notify(
+        activo
+          ? `Producto ${actualizado.nombre} habilitado con exito`
+          : `Producto ${actualizado.nombre} deshabilitado con exito`
+      );
+      return actualizado;
+    } catch (err) {
+      notify(err.message, 'error');
+      throw err;
+    }
+  }
+
   async function eliminarProducto(id) {
-    const producto = productos.find((item) => item.id === id);
+    const producto = productosTodos.find((item) => item.id === id);
     await api.eliminarProducto(id);
     setRefreshKey((valor) => valor + 1);
     setCarrito((actual) => actual.filter((item) => item.producto.id !== id));
@@ -470,6 +672,13 @@ export default function App() {
     }
   }
 
+  async function guardarConfigVencimientos(datos) {
+    const guardado = await api.guardarConfigVencimientos(datos);
+    setConfigVencimientos(guardado);
+    notify('Cambios guardados');
+    return guardado;
+  }
+
   async function iniciarSesion(usuario, password) {
     const datos = await api.login(usuario, password);
     guardarToken(datos.token);
@@ -551,17 +760,15 @@ export default function App() {
               <strong>{sesion.nombre}</strong>
               <small>{esAdmin ? 'Admin' : 'Empleado'}</small>
             </span>
-            {esAdmin && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={descargarBase}
-                title="Descargar el archivo SQLite completo"
-              >
-                <IconDownload size={16} />
-                <span className="hide-sm">Descargar base</span>
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={cerrarSesion}
+              title="Cerrar sesión"
+            >
+              <IconLogout size={16} />
+              <span className="hide-sm">Cerrar sesión</span>
+            </button>
           </div>
         </div>
       </header>
@@ -613,14 +820,12 @@ export default function App() {
               cargando={cargando}
               carrito={carrito}
               onAgregar={agregarAlCarrito}
-              onEditar={editarProducto}
-              onEliminar={eliminarProducto}
-              onIrACategorias={esAdmin ? () => setTab('categorias') : undefined}
-              puedeEditar={esAdmin}
+              onIrAProductos={esAdmin ? () => setTab('categorias') : undefined}
             />
             <Carrito
               carrito={carrito}
               onCambiarCantidad={cambiarCantidad}
+              onFijarCantidad={fijarCantidad}
               onQuitar={quitarDelCarrito}
               onVaciar={vaciarCarrito}
               onConfirmar={confirmarVenta}
@@ -636,10 +841,7 @@ export default function App() {
           <StockBajo
             datos={stockBajo}
             cargando={cargandoStockBajo}
-            categorias={categorias}
-            onEditar={editarProducto}
             onIrAInventario={() => setTab('inventario')}
-            puedeEditar={esAdmin}
           />
         )}
 
@@ -662,15 +864,24 @@ export default function App() {
         )}
 
         {tab === 'categorias' && (
-          <Categorias
+          <Productos
+            productos={productosTodos}
             categorias={categorias}
-            onCrear={crearCategoria}
-            onRenombrar={renombrarCategoria}
-            onEliminar={eliminarCategoria}
+            cargando={cargando}
             onCrearProducto={crearProducto}
+            onEditarProducto={editarProducto}
+            onEliminarProducto={eliminarProducto}
+            onAlternarActivo={alternarActivoProducto}
+            onCrearCategoria={crearCategoria}
+            onRenombrarCategoria={renombrarCategoria}
+            onEliminarCategoria={eliminarCategoria}
             onIrAInventario={() => setTab('inventario')}
           />
         )}
+
+        {tab === 'proveedores' && <Proveedores onAviso={notify} />}
+
+        {tab === 'vencimientos' && <Vencimientos onAviso={notify} />}
         </main>
       </div>
 
@@ -699,7 +910,9 @@ export default function App() {
           onCreate={crearUsuario}
           onUpdate={actualizarUsuario}
           onDelete={eliminarUsuario}
-          onCerrarSesion={cerrarSesion}
+          onDescargarBase={descargarBase}
+          configVencimientos={configVencimientos}
+          onGuardarConfigVencimientos={guardarConfigVencimientos}
           onCerrar={() => setMostrarConfiguracion(false)}
         />
       )}

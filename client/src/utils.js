@@ -9,6 +9,55 @@ export function formatARS(value) {
   return formatoMoneda.format(Number(value) || 0);
 }
 
+function round2(value) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+export function normalizarProducto(producto) {
+  const tipo = producto?.tipo === 'peso' ? 'peso' : 'unidad';
+  const gramosPorUnidad =
+    Number(producto?.gramosPorUnidad ?? producto?.gramos_por_unidad) || null;
+  const cantidad = Math.max(0, Math.floor(Number(producto?.cantidad) || 0));
+  const gramosPorUnidadValidos = tipo === 'peso' && gramosPorUnidad > 0 ? gramosPorUnidad : null;
+  const gramosDisponibles = Math.max(
+    0,
+    Number(producto?.gramosDisponibles ?? producto?.gramos_disponibles) || 0
+  );
+
+  const gramosTotales = gramosPorUnidadValidos
+    ? Math.max(0, (cantidad - 1) * gramosPorUnidadValidos + Math.min(gramosDisponibles, gramosPorUnidadValidos))
+    : null;
+
+  return {
+    ...producto,
+    tipo,
+    cantidad,
+    gramosPorUnidad: gramosPorUnidadValidos,
+    gramosDisponibles: gramosPorUnidadValidos ? gramosDisponibles : null,
+    gramosTotales,
+    precioPorGramo: gramosPorUnidadValidos ? Number(producto?.precio || 0) / gramosPorUnidadValidos : null,
+  };
+}
+
+export function esProductoPeso(producto) {
+  return normalizarProducto(producto).tipo === 'peso';
+}
+
+export function stockDisponible(producto) {
+  const normalizado = normalizarProducto(producto);
+  return normalizado.gramosTotales ?? normalizado.cantidad;
+}
+
+export function subtotalProducto(producto, cantidad) {
+  const normalizado = normalizarProducto(producto);
+  const cantidadNumero = Math.max(0, Number(cantidad) || 0);
+  return round2(
+    normalizado.precioPorGramo
+      ? normalizado.precioPorGramo * cantidadNumero
+      : Number(normalizado.precio || 0) * cantidadNumero
+  );
+}
+
 export function calcularDescuento(subtotal, tipo, valor) {
   const bruto = Math.max(0, Number(subtotal) || 0);
   const numero = Number(valor);

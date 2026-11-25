@@ -9,7 +9,14 @@ import {
   IconTrash,
   IconWallet,
 } from './Icons.jsx';
-import { calcularDescuento, formatARS, formatFechaCorta, formatHora } from '../utils.js';
+import {
+  calcularDescuento,
+  formatARS,
+  formatFechaCorta,
+  formatHora,
+  normalizarProducto,
+  stockDisponible,
+} from '../utils.js';
 import { api } from '../api.js';
 
 export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
@@ -22,6 +29,10 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
       categoria: item.categoria,
       precio: item.precio,
       cantidad: item.cantidad,
+      tipo: item.tipo === 'peso' ? 'peso' : 'unidad',
+      gramos: item.gramos ?? null,
+      gramosPorUnidad: item.gramosPorUnidad ?? null,
+      precioUnidad: item.precioUnidad ?? item.precio,
     }))
   );
   const [descuentoTipo, setDescuentoTipo] = useState(venta.descuentoTipo || 'porcentaje');
@@ -45,18 +56,23 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
       .getProductos()
       .then((datos) => {
         if (cancelado) return;
-        setProductos(datos);
+        const normalizados = datos.map(normalizarProducto);
+        setProductos(normalizados);
         setItems((actual) =>
           actual.map((item) => {
-            const producto = datos.find((fila) => fila.id === item.productoId);
-            return producto
-              ? {
-                  ...item,
-                  nombre: producto.nombre,
-                  categoria: producto.categoria,
-                  precio: producto.precio,
-                }
-              : item;
+            const producto = normalizados.find((fila) => fila.id === item.productoId);
+            if (!producto) return item;
+            const peso = producto.tipo === 'peso';
+            return {
+              ...item,
+              nombre: producto.nombre,
+              categoria: producto.categoria,
+              tipo: producto.tipo,
+              gramos: peso ? item.cantidad : null,
+              gramosPorUnidad: peso ? producto.gramosPorUnidad : null,
+              precioUnidad: producto.precio,
+              precio: peso ? producto.precioPorGramo : producto.precio,
+            };
           })
         );
       })
@@ -78,13 +94,16 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
 
   function disponibleProducto(productoId) {
     const producto = productos.find((fila) => fila.id === productoId);
-    return Math.max(0, (producto?.cantidad ?? 0) + cantidadOriginal(productoId));
+    if (!producto) return 0;
+    return Math.max(0, stockDisponible(producto) + cantidadOriginal(productoId));
   }
 
   function cambiarCantidad(productoId, valor) {
     const numero = Math.max(1, Math.min(disponibleProducto(productoId), Math.floor(Number(valor) || 1)));
     setItems((actual) =>
-      actual.map((item) => (item.productoId === productoId ? { ...item, cantidad: numero } : item))
+      actual.map((item) =>
+        item.productoId === productoId ? { ...item, cantidad: numero, gramos: item.tipo === 'peso' ? numero : null } : item
+      )
     );
   }
 
@@ -102,12 +121,14 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
       setError(`"${producto.nombre}" está deshabilitado y no se puede vender`);
       return;
     }
-    if (producto.cantidad <= 0) {
+    const disponible = stockDisponible(producto);
+    if (disponible <= 0) {
       setError(`No hay stock disponible de "${producto.nombre}"`);
       return;
     }
 
-    const cantidad = Math.max(1, Math.min(producto.cantidad, Math.floor(Number(cantidadAgregar) || 1)));
+    const peso = producto.tipo === 'peso';
+    const cantidad = Math.max(1, Math.min(disponible, Math.floor(Number(cantidadAgregar) || 1)));
     setItems((actual) => {
       if (actual.some((item) => item.productoId === producto.id)) return actual;
       return [
@@ -116,13 +137,17 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
           productoId: producto.id,
           nombre: producto.nombre,
           categoria: producto.categoria,
-          precio: producto.precio,
+          precio: peso ? producto.precioPorGramo : producto.precio,
+          precioUnidad: producto.precio,
           cantidad,
+          tipo: producto.tipo,
+          gramos: peso ? cantidad : null,
+          gramosPorUnidad: peso ? producto.gramosPorUnidad : null,
         },
       ];
     });
     setProductoAgregarId('');
-    setCantidadAgregar('1');
+    setCantidadAgregar(peso ? '100' : '1');
     setError('');
   }
 
@@ -150,7 +175,12 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
       await onGuardar(
         venta.id,
         metodoPago,
-        items.map((item) => ({ productoId: item.productoId, cantidad: item.cantidad })),
+        items.map((item) => ({
+          productoId: item.productoId,
+          cantidad: item.cantidad,
+          tipo: item.tipo,
+          gramos: item.tipo === 'peso' ? item.cantidad : null,
+        })),
         {
           descuentoTipo: descuento > 0 ? descuentoTipo : null,
           descuentoValor: descuento > 0 ? valorDescuento : 0,
@@ -185,7 +215,7 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
   const productosParaAgregar = productos.filter(
     (producto) =>
       Number(producto.activo) !== 0 &&
-      producto.cantidad > 0 &&
+      stockDisponible(producto) > 0 &&
       !items.some((item) => item.productoId === producto.id)
   );
 
@@ -205,20 +235,25 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
         <div className="venta-edit-items">
           {items.map((item) => {
             const disponible = disponibleProducto(item.productoId);
+            const peso = item.tipo === 'peso';
+            const paso = peso ? 100 : 1;
+            const sufijo = peso ? ' g' : '';
             return (
               <div className="venta-edit-row" key={item.productoId}>
                 <div className="venta-edit-info">
                   <strong>{item.nombre}</strong>
                   <small>
-                    {item.categoria} · {formatARS(item.precio)} · disponible {disponible}
+                    {item.categoria} · {formatARS(item.precio)}
+                    {peso ? ' / g' : ''} · disponible {disponible}
+                    {sufijo}
                   </small>
                 </div>
 
                 <div className="stepper">
                   <button
                     type="button"
-                    aria-label={`Restar una unidad de ${item.nombre}`}
-                    onClick={() => cambiarCantidad(item.productoId, item.cantidad - 1)}
+                    aria-label={`Restar ${peso ? 'gramos' : 'una unidad'} de ${item.nombre}`}
+                    onClick={() => cambiarCantidad(item.productoId, item.cantidad - paso)}
                     disabled={item.cantidad <= 1}
                   >
                     <IconMinus size={14} />
@@ -228,13 +263,13 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
                     min="1"
                     max={Math.max(1, disponible)}
                     value={item.cantidad}
-                    aria-label={`Cantidad de ${item.nombre} en la venta`}
+                    aria-label={`${peso ? 'Gramos' : 'Cantidad'} de ${item.nombre} en la venta`}
                     onChange={(e) => cambiarCantidad(item.productoId, e.target.value)}
                   />
                   <button
                     type="button"
-                    aria-label={`Sumar una unidad de ${item.nombre}`}
-                    onClick={() => cambiarCantidad(item.productoId, item.cantidad + 1)}
+                    aria-label={`Sumar ${peso ? 'gramos' : 'una unidad'} de ${item.nombre}`}
+                    onClick={() => cambiarCantidad(item.productoId, item.cantidad + paso)}
                     disabled={item.cantidad >= disponible}
                   >
                     <IconPlus size={14} />
@@ -276,7 +311,10 @@ export default function EditarVentaModal({ venta, onGuardar, onCerrar }) {
               </option>
               {productosParaAgregar.map((producto) => (
                 <option key={producto.id} value={producto.id}>
-                  {producto.nombre} · {formatARS(producto.precio)} · stock {producto.cantidad}
+                  {producto.nombre} ·{' '}
+                  {producto.tipo === 'peso'
+                    ? `${formatARS(producto.precioPorGramo)} / g · stock ${stockDisponible(producto)} g`
+                    : `${formatARS(producto.precio)} · stock ${producto.cantidad}`}
                 </option>
               ))}
             </select>

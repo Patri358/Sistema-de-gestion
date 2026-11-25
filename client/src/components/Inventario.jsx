@@ -1,21 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import EditarProductoModal from './EditarProductoModal.jsx';
-import ConfirmModal from './ConfirmModal.jsx';
 import {
   IconBarcode,
   IconBox,
   IconCart,
-  IconEdit,
   IconImage,
   IconMinus,
   IconPlus,
   IconSearch,
   IconTag,
-  IconTrash,
   IconX,
 } from './Icons.jsx';
-import { formatARS, iniciales } from '../utils.js';
+import { esProductoPeso, formatARS, iniciales, stockDisponible } from '../utils.js';
 
 function estadoStock(cantidad) {
   if (cantidad <= 0) return { clase: 'stock-out', texto: 'Sin stock' };
@@ -23,23 +19,26 @@ function estadoStock(cantidad) {
   return { clase: 'stock-ok', texto: `${cantidad} en stock` };
 }
 
-function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar, puedeEditar }) {
+function ProductoCard({ producto, enCarrito, onAgregar }) {
+  const peso = esProductoPeso(producto);
   const stock = estadoStock(producto.cantidad);
   const deshabilitado = Number(producto.activo) === 0;
-  const sinStock = producto.cantidad <= 0;
-  const disponible = Math.max(0, producto.cantidad - enCarrito);
+  const sinStock = stockDisponible(producto) <= 0;
+  const disponible = Math.max(0, stockDisponible(producto) - enCarrito);
   const alMaximo = disponible <= 0;
   const bloqueado = deshabilitado || sinStock;
-  const [cantidad, setCantidad] = useState(1);
+  const paso = peso ? 100 : 1;
+  const sufijo = peso ? ' g' : '';
+  const [cantidad, setCantidad] = useState(peso ? Math.min(paso, Math.max(0, disponible)) : 1);
 
   useEffect(() => {
-    setCantidad((actual) => Math.min(Math.max(1, actual), Math.max(1, disponible)));
+    setCantidad((actual) => Math.min(Math.max(0, actual), Math.max(0, disponible)));
   }, [disponible]);
 
   function cambiarCantidad(valor) {
     const numero = Number(valor);
     if (!Number.isFinite(numero)) return;
-    setCantidad(Math.min(Math.max(1, Math.floor(numero)), Math.max(1, disponible)));
+    setCantidad(Math.min(Math.max(0, Math.floor(numero)), Math.max(0, disponible)));
   }
 
   return (
@@ -56,28 +55,6 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar, pu
         {deshabilitado && <span className="media-tag">Deshabilitado</span>}
         {!deshabilitado && sinStock && <span className="media-tag">Sin stock</span>}
 
-        {puedeEditar && (
-          <div className="product-actions">
-            <button
-              type="button"
-              className="card-action"
-              title="Editar producto"
-              aria-label={`Editar ${producto.nombre}`}
-              onClick={() => onEditar(producto)}
-            >
-              <IconEdit size={16} />
-            </button>
-            <button
-              type="button"
-              className="card-action danger"
-              title="Eliminar producto"
-              aria-label={`Eliminar ${producto.nombre}`}
-              onClick={() => onEliminar(producto)}
-            >
-              <IconTrash size={16} />
-            </button>
-          </div>
-        )}
       </div>
 
       <div className="product-body">
@@ -89,11 +66,24 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar, pu
           </span>
         </div>
 
-        <p className="product-price">{formatARS(producto.precio)}</p>
+        <p className="product-price">
+          {peso && producto.precioPorGramo ? (
+            <>
+              {formatARS(producto.precioPorGramo)} <small>/ g</small>
+              <span className="price-secondary">{formatARS(producto.precio)} por unidad</span>
+            </>
+          ) : (
+            formatARS(producto.precio)
+          )}
+        </p>
 
         <div className="product-meta">
           <span className={`chip ${deshabilitado ? 'chip-disabled' : stock.clase}`}>
-            {deshabilitado ? 'No disponible' : stock.texto}
+            {deshabilitado
+              ? 'No disponible'
+              : peso
+                ? `${producto.cantidad} u. · ${producto.gramosDisponibles ?? 0} g`
+                : stock.texto}
           </span>
           <span className="barcode" title="Código de barra">
             {producto.codigo_barras || 'Sin código'}
@@ -104,25 +94,25 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar, pu
           <div className="qty-picker">
             <button
               type="button"
-              aria-label={`Restar una unidad de ${producto.nombre}`}
-              onClick={() => cambiarCantidad(cantidad - 1)}
-              disabled={bloqueado || alMaximo || cantidad <= 1}
+              aria-label={`Restar ${peso ? 'gramos' : 'una unidad'} de ${producto.nombre}`}
+              onClick={() => cambiarCantidad(cantidad - paso)}
+              disabled={bloqueado || alMaximo || cantidad <= 0}
             >
               <IconMinus size={14} />
             </button>
             <input
               type="number"
-              min="1"
-              max={Math.max(1, disponible)}
+              min="0"
+              max={Math.max(0, disponible)}
               value={cantidad}
-              aria-label={`Cantidad de ${producto.nombre}`}
+              aria-label={`${peso ? 'Gramos' : 'Cantidad'} de ${producto.nombre}`}
               onChange={(e) => cambiarCantidad(e.target.value)}
               disabled={bloqueado || alMaximo}
             />
             <button
               type="button"
-              aria-label={`Sumar una unidad de ${producto.nombre}`}
-              onClick={() => cambiarCantidad(cantidad + 1)}
+              aria-label={`Sumar ${peso ? 'gramos' : 'una unidad'} de ${producto.nombre}`}
+              onClick={() => cambiarCantidad(cantidad + paso)}
               disabled={bloqueado || alMaximo || cantidad >= disponible}
             >
               <IconPlus size={14} />
@@ -133,7 +123,7 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar, pu
             type="button"
             className="btn btn-primary btn-sm product-add"
             onClick={() => onAgregar(producto, cantidad)}
-            disabled={bloqueado || alMaximo}
+            disabled={bloqueado || alMaximo || cantidad <= 0}
           >
             <IconCart size={16} />
             {deshabilitado
@@ -141,12 +131,14 @@ function ProductoCard({ producto, enCarrito, onAgregar, onEditar, onEliminar, pu
               : sinStock
               ? 'Sin stock'
               : alMaximo
-                ? `En el carrito (${enCarrito})`
-                : cantidad > 1
-                  ? `Agregar ${cantidad}`
-                  : enCarrito > 0
-                    ? 'Agregar otro'
-                    : 'Agregar al carrito'}
+                ? `En el carrito (${enCarrito}${sufijo})`
+                : cantidad <= 0
+                  ? 'Ingresá una cantidad'
+                  : cantidad > 1
+                    ? `Agregar ${cantidad}${sufijo}`
+                    : enCarrito > 0
+                      ? 'Agregar otro'
+                      : 'Agregar al carrito'}
           </button>
         </div>
       </div>
@@ -162,15 +154,8 @@ export default function Inventario({
   cargando,
   carrito,
   onAgregar,
-  onEditar,
-  onEliminar,
-  onIrACategorias,
-  puedeEditar = true,
+  onIrAProductos,
 }) {
-  const [productoEditando, setProductoEditando] = useState(null);
-  const [productoAEliminar, setProductoAEliminar] = useState(null);
-  const [eliminando, setEliminando] = useState(false);
-  const [errorEliminar, setErrorEliminar] = useState('');
   const [codigoEscaneo, setCodigoEscaneo] = useState('');
   const [buscandoCodigo, setBuscandoCodigo] = useState(false);
   const [mensajeCodigo, setMensajeCodigo] = useState(null);
@@ -185,20 +170,6 @@ export default function Inventario({
 
   const hayFiltros = Boolean(filtros.busqueda || filtros.categoria);
 
-  async function confirmarEliminacion() {
-    if (!productoAEliminar) return;
-    setErrorEliminar('');
-    setEliminando(true);
-    try {
-      await onEliminar(productoAEliminar.id);
-      setProductoAEliminar(null);
-    } catch (err) {
-      setErrorEliminar(err.message);
-    } finally {
-      setEliminando(false);
-    }
-  }
-
   async function escanearCodigo(event) {
     event.preventDefault();
     const codigo = codigoEscaneo.trim();
@@ -208,7 +179,17 @@ export default function Inventario({
     setMensajeCodigo(null);
     try {
       const producto = await api.buscarProductoCodigo(codigo);
-      const agregadas = onAgregar(producto, 1);
+      const peso = producto.tipo === 'peso';
+      const agregadas = onAgregar(producto, peso ? 100 : 1);
+      if (peso && agregadas) {
+        setMensajeCodigo({
+          tipo: 'ok',
+          texto: `"${producto.nombre}" es por peso. Ajustá los gramos en el carrito.`,
+        });
+        setCodigoEscaneo('');
+        return;
+      }
+
       setMensajeCodigo(
         agregadas
           ? { tipo: 'ok', texto: `"${producto.nombre}" agregado al carrito` }
@@ -227,11 +208,7 @@ export default function Inventario({
       <div className="page-head">
         <div>
           <h1>Inventario</h1>
-          <p>
-            {puedeEditar
-              ? 'Buscá por nombre o código de barra, editá el stock y armá el carrito.'
-              : 'Buscá por nombre o código de barra y armá el carrito.'}
-          </p>
+          <p>Buscá por nombre o código de barra y armá el carrito.</p>
         </div>
         <span className="count-pill">
           {productos.length} {productos.length === 1 ? 'producto' : 'productos'}
@@ -333,10 +310,10 @@ export default function Inventario({
             <p>
               {hayFiltros
                 ? 'Probá con otro nombre, código de barra o categoría.'
-                : puedeEditar
+                : onIrAProductos
                   ? categorias.length === 0
-                    ? 'Primero creá una categoría desde la sección Agregar productos y después cargá tu primer producto.'
-                    : 'Cargá el primer producto desde la sección Agregar productos.'
+                    ? 'Primero creá una categoría desde la sección Productos y después cargá tu primer producto.'
+                    : 'Cargá el primer producto desde la sección Productos.'
                   : 'No hay productos disponibles en este momento.'}
             </p>
             {hayFiltros ? (
@@ -348,8 +325,8 @@ export default function Inventario({
                 Ver todos los productos
               </button>
             ) : (
-              puedeEditar && (
-                <button type="button" className="btn btn-secondary" onClick={onIrACategorias}>
+              onIrAProductos && (
+                <button type="button" className="btn btn-secondary" onClick={onIrAProductos}>
                   {categorias.length === 0 ? 'Crear categoría' : 'Cargar producto'}
                 </button>
               )
@@ -363,38 +340,11 @@ export default function Inventario({
                 producto={producto}
                 enCarrito={cantidadesEnCarrito.get(producto.id) ?? 0}
                 onAgregar={onAgregar}
-                onEditar={setProductoEditando}
-                onEliminar={(seleccionado) => {
-                  setErrorEliminar('');
-                  setProductoAEliminar(seleccionado);
-                }}
-                puedeEditar={puedeEditar}
               />
             ))}
           </div>
         )}
 
-      {puedeEditar && productoEditando && (
-        <EditarProductoModal
-          producto={productoEditando}
-          categorias={categorias}
-          onGuardar={onEditar}
-          onCerrar={() => setProductoEditando(null)}
-        />
-      )}
-
-      {puedeEditar && productoAEliminar && (
-        <ConfirmModal
-          titulo="Eliminar producto"
-          mensaje={`¿Seguro que querés eliminar "${productoAEliminar.nombre}"?`}
-          detalle="Se quitará del inventario y del carrito. Esta acción no se puede deshacer."
-          textoConfirmar="Eliminar producto"
-          onConfirmar={confirmarEliminacion}
-          onCerrar={() => setProductoAEliminar(null)}
-          cargando={eliminando}
-          error={errorEliminar}
-        />
-      )}
     </div>
   );
 }

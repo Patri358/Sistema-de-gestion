@@ -3,7 +3,9 @@ const CLAVE_SESION = 'cstore-sesion';
 
 export function leerToken() {
   try {
-    return localStorage.getItem(CLAVE_SESION);
+    const tokenAnterior = localStorage.getItem(CLAVE_SESION);
+    if (tokenAnterior) localStorage.removeItem(CLAVE_SESION);
+    return sessionStorage.getItem(CLAVE_SESION);
   } catch {
     return null;
   }
@@ -11,12 +13,13 @@ export function leerToken() {
 
 export function guardarToken(token) {
   try {
-    localStorage.setItem(CLAVE_SESION, token);
+    sessionStorage.setItem(CLAVE_SESION, token);
   } catch {}
 }
 
 export function limpiarToken() {
   try {
+    sessionStorage.removeItem(CLAVE_SESION);
     localStorage.removeItem(CLAVE_SESION);
   } catch {}
 }
@@ -108,6 +111,42 @@ export const api = {
   },
   eliminarCategoria(id) {
     return request(`/categorias/${id}`, { method: 'DELETE' });
+  },
+  getProveedores() {
+    return request('/proveedores');
+  },
+  getProveedor(id) {
+    return request(`/proveedores/${id}`);
+  },
+  crearProveedor(datos) {
+    return request('/proveedores', { method: 'POST', body: JSON.stringify(datos) });
+  },
+  actualizarProveedor(id, datos) {
+    return request(`/proveedores/${id}`, { method: 'PUT', body: JSON.stringify(datos) });
+  },
+  guardarPrecioProveedor(id, productoId, precioCompra) {
+    return request(`/proveedores/${id}/productos/${productoId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ precio_compra: precioCompra }),
+    });
+  },
+  getVencimientos() {
+    return request('/vencimientos');
+  },
+  crearVencimiento(datos) {
+    return request('/vencimientos', { method: 'POST', body: JSON.stringify(datos) });
+  },
+  eliminarVencimiento(id) {
+    return request(`/vencimientos/${id}`, { method: 'DELETE' });
+  },
+  getConfigVencimientos() {
+    return request('/configuracion/vencimientos');
+  },
+  guardarConfigVencimientos(datos) {
+    return request('/configuracion/vencimientos', {
+      method: 'PUT',
+      body: JSON.stringify(datos),
+    });
   },
   getVentas(periodo, valor) {
     const params = new URLSearchParams({ periodo, valor });

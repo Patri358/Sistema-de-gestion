@@ -30,6 +30,84 @@ function round2(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+const AVISOS_VENCIMIENTO = ['inicio_mes', 'inicio_semana', 'dia'];
+const AVISOS_VENCIMIENTO_VALIDOS = new Set(AVISOS_VENCIMIENTO);
+
+function normalizarAvisosVencimiento(raw) {
+  const valores = Array.isArray(raw)
+    ? raw
+    : String(raw ?? '')
+        .split(',')
+        .map((valor) => valor.trim())
+        .filter(Boolean);
+  const unicos = [...new Set(valores)];
+  const invalidos = unicos.filter((valor) => !AVISOS_VENCIMIENTO_VALIDOS.has(valor));
+  if (invalidos.length) throw httpError(400, 'Hay avisos de vencimiento inválidos');
+  return AVISOS_VENCIMIENTO.filter((valor) => unicos.includes(valor));
+}
+
+function leerConfigTexto(clave, defecto) {
+  return db.prepare('SELECT valor FROM configuracion WHERE clave = ?').get(clave)?.valor ?? defecto;
+}
+
+function guardarConfigTexto(clave, valor) {
+  db.prepare(
+    `INSERT INTO configuracion (clave, valor) VALUES (?, ?)
+     ON CONFLICT (clave) DO UPDATE SET valor = excluded.valor`
+  ).run(clave, String(valor));
+}
+
+function configuracionVencimientos() {
+  const avisosGuardados = leerConfigTexto(
+    'vencimientos_avisos',
+    leerConfigTexto('vencimientos_aviso', 'dia')
+  );
+  return {
+    avisos: normalizarAvisosVencimiento(avisosGuardados),
+    borrarStockCero: leerConfigTexto('vencimientos_borrar_stock_cero', '0') === '1',
+  };
+}
+
+function borrarVencimientosSiStockCero(productoId) {
+  if (!configuracionVencimientos().borrarStockCero) return;
+  db.prepare('DELETE FROM vencimientos WHERE producto_id = ?').run(productoId);
+}
+
+function esProductoPeso(producto) {
+  return producto?.tipo === 'peso';
+}
+
+function gramosDisponibles(producto) {
+  if (!esProductoPeso(producto)) return 0;
+  const unidades = Number(producto.cantidad) || 0;
+  const gramosPorUnidad = Number(producto.gramos_por_unidad) || 0;
+  const parcial = Number(producto.gramos_disponibles) || 0;
+  if (unidades <= 0 || gramosPorUnidad <= 0) return 0;
+  return (unidades - 1) * gramosPorUnidad + Math.min(parcial, gramosPorUnidad);
+}
+
+function stockPorGramos(producto, gramos) {
+  const gramosPorUnidad = Number(producto.gramos_por_unidad) || 0;
+  if (!esProductoPeso(producto) || gramosPorUnidad <= 0 || gramos <= 0) {
+    return { cantidad: 0, gramosDisponibles: 0 };
+  }
+  const cantidad = Math.ceil(gramos / gramosPorUnidad);
+  return {
+    cantidad,
+    gramosDisponibles: gramos - (cantidad - 1) * gramosPorUnidad,
+  };
+}
+
+function devolverStock(producto, cantidad) {
+  if (esProductoPeso(producto)) {
+    return stockPorGramos(producto, gramosDisponibles(producto) + cantidad);
+  }
+  return {
+    cantidad: (Number(producto.cantidad) || 0) + cantidad,
+    gramosDisponibles: producto.gramos_disponibles,
+  };
+}
+
 function parseNombreUsuario(raw) {
   const nombre = String(raw ?? '').trim();
   if (!nombre) throw httpError(400, 'El nombre de usuario es obligatorio');
@@ -107,7 +185,96 @@ function validarCategoria(nombre) {
   return categoria.nombre;
 }
 
-function parseProducto(body, activoPorDefecto = 1, stockMinimoPorDefecto = STOCK_BAJO_LIMITE) {
+function parseTextoProveedor(raw, etiqueta, max, obligatorio = false) {
+  const texto = String(raw ?? '').trim();
+  if (!texto && obligatorio) throw httpError(400, `${etiqueta} es obligatoria`);
+  if (texto.length > max) throw httpError(400, `${etiqueta} no puede superar los ${max} caracteres`);
+  return texto;
+}
+
+function parseIdsProductosProveedor(raw) {
+  if (!Array.isArray(raw)) throw httpError(400, 'La lista de productos no es válida');
+  const ids = [...new Set(raw.map(Number))];
+  if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+    throw httpError(400, 'La lista de productos no es válida');
+  }
+  if (ids.length > 0) {
+    const encontrados = db
+      .prepare(`SELECT COUNT(*) AS total FROM productos WHERE id IN (${ids.map(() => '?').join(', ')})`)
+      .get(...ids).total;
+    if (encontrados !== ids.length) {
+      throw httpError(400, 'Uno de los productos seleccionados no existe');
+    }
+  }
+  return ids;
+}
+
+function parseProveedor(body) {
+  const razonSocial = parseTextoProveedor(body?.razon_social, 'La razón social', 120, true);
+  const telefono = parseTextoProveedor(body?.telefono, 'El teléfono', 60);
+  const email = parseTextoProveedor(body?.email, 'El mail', 120);
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw httpError(400, 'El mail no es válido');
+  }
+  const rubro = parseTextoProveedor(body?.rubro, 'El rubro', 80);
+  const descripcion = parseTextoProveedor(body?.descripcion, 'La descripción', 500);
+  const productoIds = parseIdsProductosProveedor(body?.producto_ids);
+  return { razonSocial, telefono, email, rubro, descripcion, productoIds };
+}
+
+function parsePrecioCompra(raw) {
+  const precio = Number(raw);
+  if (!Number.isFinite(precio) || precio < 0) {
+    throw httpError(400, 'El precio de compra debe ser un número mayor o igual a cero');
+  }
+  return Math.round(precio * 100) / 100;
+}
+
+function parseVencimiento(body) {
+  const productoId = Number(body?.producto_id ?? body?.productoId);
+  if (!Number.isInteger(productoId) || productoId <= 0) {
+    throw httpError(400, 'Elegí un producto creado');
+  }
+  const producto = db.prepare('SELECT nombre FROM productos WHERE id = ?').get(productoId);
+  if (!producto) throw httpError(400, 'El producto elegido no existe');
+
+  const fecha = String(body?.fecha ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    throw httpError(400, 'La fecha no es válida');
+  }
+  const [anio, mes, dia] = fecha.split('-').map(Number);
+  const fechaValidada = new Date(Date.UTC(anio, mes - 1, dia));
+  if (
+    fechaValidada.getUTCFullYear() !== anio ||
+    fechaValidada.getUTCMonth() !== mes - 1 ||
+    fechaValidada.getUTCDate() !== dia
+  ) {
+    throw httpError(400, 'La fecha no es válida');
+  }
+  return { productoId, producto: producto.nombre, fecha };
+}
+
+function obtenerProveedor(id) {
+  const proveedor = db.prepare('SELECT * FROM proveedores WHERE id = ?').get(id);
+  if (!proveedor) throw httpError(404, 'Proveedor no encontrado');
+  const productos = db
+    .prepare(
+      `SELECT p.id, p.nombre, p.categoria, p.precio, p.cantidad, pp.precio_compra
+       FROM proveedor_productos pp
+       INNER JOIN productos p ON p.id = pp.producto_id
+       WHERE pp.proveedor_id = ?
+       ORDER BY p.nombre COLLATE NOCASE ASC`
+    )
+    .all(id);
+  return { ...proveedor, productos };
+}
+
+function parseProducto(
+  body,
+  activoPorDefecto = 1,
+  stockMinimoPorDefecto = STOCK_BAJO_LIMITE,
+  productoAnterior = null
+) {
   const nombre = String(body?.nombre ?? '').trim();
   const categoria = parseCategoriaNombre(body?.categoria);
   const precioRaw = body?.precio;
@@ -118,6 +285,10 @@ function parseProducto(body, activoPorDefecto = 1, stockMinimoPorDefecto = STOCK
   const activoRaw = body?.activo;
   let activo = activoPorDefecto ? 1 : 0;
   let stockMinimo = stockMinimoPorDefecto;
+  const tipo = String(body?.tipo ?? productoAnterior?.tipo ?? 'unidad');
+  if (!['unidad', 'peso'].includes(tipo)) {
+    throw httpError(400, 'El tipo de producto debe ser unidad o peso');
+  }
 
   if (activoRaw !== undefined && activoRaw !== null) {
     if (typeof activoRaw === 'boolean') {
@@ -148,6 +319,33 @@ function parseProducto(body, activoPorDefecto = 1, stockMinimoPorDefecto = STOCK
     throw httpError(400, 'La cantidad debe ser un número entero mayor o igual a 0');
   }
 
+  let gramosPorUnidad = null;
+  let gramosDisponibles = null;
+  if (tipo === 'peso') {
+    const gramosRaw = body?.gramosPorUnidad ?? body?.gramos_por_unidad ?? productoAnterior?.gramos_por_unidad;
+    gramosPorUnidad = Number(gramosRaw);
+    if (
+      gramosRaw === '' ||
+      gramosRaw === null ||
+      gramosRaw === undefined ||
+      !Number.isInteger(gramosPorUnidad) ||
+      gramosPorUnidad <= 0
+    ) {
+      throw httpError(400, 'Los gramos por unidad deben ser un número entero mayor que 0');
+    }
+
+    const reiniciarParcial =
+      !productoAnterior ||
+      productoAnterior.tipo !== 'peso' ||
+      Number(productoAnterior.cantidad) !== cantidad ||
+      Number(productoAnterior.gramos_por_unidad) !== gramosPorUnidad;
+    gramosDisponibles = reiniciarParcial
+      ? gramosPorUnidad
+      : Number(productoAnterior.gramos_disponibles) || 0;
+    if (cantidad <= 0) gramosDisponibles = 0;
+    if (gramosDisponibles > gramosPorUnidad) gramosDisponibles = gramosPorUnidad;
+  }
+
   if (
     stockMinimoRaw !== undefined &&
     stockMinimoRaw !== null &&
@@ -173,6 +371,9 @@ function parseProducto(body, activoPorDefecto = 1, stockMinimoPorDefecto = STOCK
     codigo_barras: codigo || null,
     imagen,
     activo,
+    tipo,
+    gramos_por_unidad: gramosPorUnidad,
+    gramos_disponibles: gramosDisponibles,
   };
 }
 
@@ -969,6 +1170,221 @@ app.delete('/api/categorias/:id', soloAdmin, (req, res, next) => {
   }
 });
 
+app.get('/api/proveedores', soloAdmin, (_req, res, next) => {
+  try {
+    const proveedores = db
+      .prepare(
+        `SELECT pr.*, COUNT(pp.producto_id) AS productos
+         FROM proveedores pr
+         LEFT JOIN proveedor_productos pp ON pp.proveedor_id = pr.id
+         GROUP BY pr.id
+         ORDER BY pr.razon_social COLLATE NOCASE ASC`
+      )
+      .all();
+    res.json(proveedores);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/proveedores/:id', soloAdmin, (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
+    res.json(obtenerProveedor(id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/proveedores', soloAdmin, (req, res, next) => {
+  try {
+    const datos = parseProveedor(req.body);
+    let id;
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const info = db
+          .prepare(
+            `INSERT INTO proveedores (razon_social, telefono, email, rubro, descripcion)
+             VALUES (?, ?, ?, ?, ?)`
+          )
+          .run(datos.razonSocial, datos.telefono, datos.email, datos.rubro, datos.descripcion);
+        id = Number(info.lastInsertRowid);
+        const insertarProducto = db.prepare(
+          'INSERT INTO proveedor_productos (proveedor_id, producto_id, precio_compra) VALUES (?, ?, 0)'
+        );
+        for (const productoId of datos.productoIds) insertarProducto.run(id, productoId);
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    } catch (error) {
+      if (String(error.message).includes('UNIQUE constraint failed')) {
+        throw httpError(409, 'Ya existe un proveedor con esa razón social');
+      }
+      throw error;
+    }
+    res.status(201).json(obtenerProveedor(id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/proveedores/:id', soloAdmin, (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
+    obtenerProveedor(id);
+    const datos = parseProveedor(req.body);
+
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare(
+          `UPDATE proveedores
+           SET razon_social = ?, telefono = ?, email = ?, rubro = ?, descripcion = ?
+           WHERE id = ?`
+        ).run(
+          datos.razonSocial,
+          datos.telefono,
+          datos.email,
+          datos.rubro,
+          datos.descripcion,
+          id
+        );
+
+        if (datos.productoIds.length > 0) {
+          const marcadores = datos.productoIds.map(() => '?').join(', ');
+          db.prepare(
+            `DELETE FROM proveedor_productos
+             WHERE proveedor_id = ? AND producto_id NOT IN (${marcadores})`
+          ).run(id, ...datos.productoIds);
+          const insertarProducto = db.prepare(
+            `INSERT OR IGNORE INTO proveedor_productos (proveedor_id, producto_id, precio_compra)
+             VALUES (?, ?, 0)`
+          );
+          for (const productoId of datos.productoIds) insertarProducto.run(id, productoId);
+        } else {
+          db.prepare('DELETE FROM proveedor_productos WHERE proveedor_id = ?').run(id);
+        }
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    } catch (error) {
+      if (String(error.message).includes('UNIQUE constraint failed')) {
+        throw httpError(409, 'Ya existe un proveedor con esa razón social');
+      }
+      throw error;
+    }
+
+    res.json(obtenerProveedor(id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/proveedores/:id/productos/:productoId', soloAdmin, (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const productoId = Number(req.params.productoId);
+    if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(productoId) || productoId <= 0) {
+      throw httpError(400, 'Id inválido');
+    }
+    obtenerProveedor(id);
+    const producto = db.prepare('SELECT id FROM productos WHERE id = ?').get(productoId);
+    if (!producto) throw httpError(404, 'Producto no encontrado');
+    const precioCompra = parsePrecioCompra(req.body?.precio_compra);
+
+    db.prepare(
+      `INSERT INTO proveedor_productos (proveedor_id, producto_id, precio_compra)
+       VALUES (?, ?, ?)
+       ON CONFLICT (proveedor_id, producto_id) DO UPDATE SET precio_compra = excluded.precio_compra`
+    ).run(id, productoId, precioCompra);
+
+    res.json(obtenerProveedor(id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/vencimientos', (req, res, next) => {
+  try {
+    const condiciones = [];
+    const parametros = [];
+    const desde = String(req.query.desde ?? '').trim();
+    const hasta = String(req.query.hasta ?? '').trim();
+    if (desde) {
+      condiciones.push('fecha >= ?');
+      parametros.push(desde);
+    }
+    if (hasta) {
+      condiciones.push('fecha <= ?');
+      parametros.push(hasta);
+    }
+    const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+    const vencimientos = db
+      .prepare(`SELECT id, producto_id AS productoId, producto, fecha FROM vencimientos ${where} ORDER BY fecha ASC, producto COLLATE NOCASE ASC`)
+      .all(...parametros);
+    res.json(vencimientos);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/vencimientos', (req, res, next) => {
+  try {
+    const datos = parseVencimiento(req.body);
+    const info = db
+      .prepare('INSERT INTO vencimientos (producto_id, producto, fecha) VALUES (?, ?, ?)')
+      .run(datos.productoId, datos.producto, datos.fecha);
+    res.status(201).json({
+      id: Number(info.lastInsertRowid),
+      productoId: datos.productoId,
+      producto: datos.producto,
+      fecha: datos.fecha,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/vencimientos/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
+    const resultado = db.prepare('DELETE FROM vencimientos WHERE id = ?').run(id);
+    if (resultado.changes === 0) throw httpError(404, 'Vencimiento no encontrado');
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/configuracion/vencimientos', (_req, res, next) => {
+  try {
+    res.json(configuracionVencimientos());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/configuracion/vencimientos', (req, res, next) => {
+  try {
+    const avisos = normalizarAvisosVencimiento(req.body?.avisos ?? req.body?.aviso ?? []);
+    const borrarStockCero =
+      req.body?.borrarStockCero === true || String(req.body?.borrarStockCero) === 'true';
+    guardarConfigTexto('vencimientos_avisos', avisos.join(','));
+    guardarConfigTexto('vencimientos_borrar_stock_cero', borrarStockCero ? '1' : '0');
+    res.json(configuracionVencimientos());
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/productos', soloAdmin, (req, res, next) => {
   try {
     const producto = parseProducto(req.body);
@@ -977,8 +1393,9 @@ app.post('/api/productos', soloAdmin, (req, res, next) => {
       info = db
         .prepare(
           `INSERT INTO productos
-             (nombre, categoria, precio, cantidad, stock_minimo, imagen, codigo_barras, activo)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+             (nombre, categoria, precio, cantidad, stock_minimo, imagen, codigo_barras, activo,
+              tipo, gramos_por_unidad, gramos_disponibles)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           producto.nombre,
@@ -988,7 +1405,10 @@ app.post('/api/productos', soloAdmin, (req, res, next) => {
           producto.stock_minimo,
           producto.imagen,
           producto.codigo_barras,
-          producto.activo
+          producto.activo,
+          producto.tipo,
+          producto.gramos_por_unidad,
+          producto.gramos_disponibles
         );
     } catch (error) {
       if (String(error.message).includes('UNIQUE constraint failed')) {
@@ -1022,7 +1442,12 @@ app.put('/api/productos/:id', soloAdmin, (req, res, next) => {
     const existente = db.prepare('SELECT * FROM productos WHERE id = ?').get(id);
     if (!existente) throw httpError(404, 'Producto no encontrado');
 
-    const producto = parseProducto(req.body, existente.activo, existente.stock_minimo);
+    const producto = parseProducto(
+      req.body,
+      existente.activo,
+      existente.stock_minimo,
+      existente
+    );
     const cambioStock = producto.cantidad !== existente.cantidad;
     const motivoStock = cambioStock
       ? parseMotivo(req.body?.motivoStock, 'motivo del movimiento de stock')
@@ -1031,10 +1456,11 @@ app.put('/api/productos/:id', soloAdmin, (req, res, next) => {
     db.exec('BEGIN IMMEDIATE');
     try {
       db.prepare(
-        `UPDATE productos
-         SET nombre = ?, categoria = ?, precio = ?, cantidad = ?, stock_minimo = ?,
-             imagen = ?, codigo_barras = ?, activo = ?
-         WHERE id = ?`
+         `UPDATE productos
+          SET nombre = ?, categoria = ?, precio = ?, cantidad = ?, stock_minimo = ?,
+              imagen = ?, codigo_barras = ?, activo = ?, tipo = ?,
+              gramos_por_unidad = ?, gramos_disponibles = ?
+          WHERE id = ?`
       ).run(
         producto.nombre,
         producto.categoria,
@@ -1044,6 +1470,9 @@ app.put('/api/productos/:id', soloAdmin, (req, res, next) => {
         producto.imagen,
         producto.codigo_barras,
         producto.activo,
+        producto.tipo,
+        producto.gramos_por_unidad,
+        producto.gramos_disponibles,
         id
       );
 
@@ -1057,6 +1486,8 @@ app.put('/api/productos/:id', soloAdmin, (req, res, next) => {
           cantidadNueva: producto.cantidad,
         });
       }
+
+      if (producto.cantidad === 0) borrarVencimientosSiStockCero(id);
 
       db.exec('COMMIT');
     } catch (error) {
@@ -1078,8 +1509,16 @@ app.delete('/api/productos/:id', soloAdmin, (req, res, next) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
 
-    const info = db.prepare('DELETE FROM productos WHERE id = ?').run(id);
-    if (info.changes === 0) throw httpError(404, 'Producto no encontrado');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const info = db.prepare('DELETE FROM productos WHERE id = ?').run(id);
+      if (info.changes === 0) throw httpError(404, 'Producto no encontrado');
+      db.prepare('DELETE FROM vencimientos WHERE producto_id = ?').run(id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -1347,9 +1786,13 @@ app.get('/api/ventas', soloAdmin, (req, res, next) => {
 
 function construirResumenConStock(agrupados, permitirInactivos = new Set()) {
   const buscarProducto = db.prepare(
-    'SELECT id, nombre, categoria, precio, cantidad, codigo_barras, activo FROM productos WHERE id = ?'
+    `SELECT id, nombre, categoria, precio, cantidad, codigo_barras, activo,
+            tipo, gramos_por_unidad, gramos_disponibles
+     FROM productos WHERE id = ?`
   );
-  const actualizarStock = db.prepare('UPDATE productos SET cantidad = cantidad - ? WHERE id = ?');
+  const actualizarStock = db.prepare(
+    'UPDATE productos SET cantidad = ?, gramos_disponibles = ? WHERE id = ?'
+  );
   const resumen = [];
   const movimientos = [];
   let total = 0;
@@ -1360,31 +1803,51 @@ function construirResumenConStock(agrupados, permitirInactivos = new Set()) {
     if (!producto.activo && !permitirInactivos.has(producto.id)) {
       throw httpError(409, `El producto "${producto.nombre}" está deshabilitado`);
     }
-    if (producto.cantidad < cantidad) {
+
+    const peso = esProductoPeso(producto);
+    const disponible = gramosDisponibles(producto) || producto.cantidad;
+    if (disponible < cantidad) {
       throw httpError(
         409,
-        `Stock insuficiente para "${producto.nombre}" (disponible: ${producto.cantidad})`
+        `Stock insuficiente para "${producto.nombre}" (disponible: ${disponible}${peso ? ' g' : ''})`
       );
     }
 
-    const subtotal = round2(producto.precio * cantidad);
+    const gramosPorUnidad = peso ? Number(producto.gramos_por_unidad) : null;
+    const subtotal = round2(
+      peso ? (producto.precio * cantidad) / gramosPorUnidad : producto.precio * cantidad
+    );
     total += subtotal;
     resumen.push({
       productoId: producto.id,
       nombre: producto.nombre,
       categoria: producto.categoria,
       codigo_barras: producto.codigo_barras,
-      precio: producto.precio,
+      precio: peso ? round2(producto.precio / gramosPorUnidad) : producto.precio,
+      precioUnidad: producto.precio,
       cantidad,
+      tipo: producto.tipo,
+      gramos: peso ? cantidad : null,
+      gramosPorUnidad,
       subtotal,
     });
+
+    let cantidadNueva;
+    if (peso) {
+      const nuevoStock = stockPorGramos(producto, gramosDisponibles(producto) - cantidad);
+      cantidadNueva = nuevoStock.cantidad;
+      actualizarStock.run(cantidadNueva, nuevoStock.gramosDisponibles, productoId);
+    } else {
+      cantidadNueva = producto.cantidad - cantidad;
+      actualizarStock.run(cantidadNueva, producto.gramos_disponibles, productoId);
+    }
+    if (cantidadNueva === 0) borrarVencimientosSiStockCero(productoId);
     movimientos.push({
       productoId: producto.id,
       productoNombre: producto.nombre,
       cantidadAnterior: producto.cantidad,
-      cantidadNueva: producto.cantidad - cantidad,
+      cantidadNueva,
     });
-    actualizarStock.run(cantidad, productoId);
   }
 
   return { resumen, total: round2(total), movimientos };
@@ -1506,7 +1969,7 @@ app.put('/api/ventas/:id', soloAdmin, (req, res, next) => {
 
     db.exec('BEGIN IMMEDIATE');
     try {
-      const buscarStock = db.prepare('SELECT id, nombre, cantidad FROM productos WHERE id = ?');
+      const buscarStock = db.prepare('SELECT * FROM productos WHERE id = ?');
       const idsAfectados = new Set([
         ...itemsAnteriores.map((item) => item.productoId),
         ...agrupados.keys(),
@@ -1517,9 +1980,14 @@ app.put('/api/ventas/:id', soloAdmin, (req, res, next) => {
         if (actual) stockAntes.set(productoId, actual.cantidad);
       }
 
-      const restaurarStock = db.prepare('UPDATE productos SET cantidad = cantidad + ? WHERE id = ?');
+      const restaurarStock = db.prepare(
+        'UPDATE productos SET cantidad = ?, gramos_disponibles = ? WHERE id = ?'
+      );
       for (const item of itemsAnteriores) {
-        restaurarStock.run(item.cantidad, item.productoId);
+        const producto = buscarStock.get(item.productoId);
+        if (!producto) continue;
+        const nuevoStock = devolverStock(producto, item.gramos ?? item.cantidad);
+        restaurarStock.run(nuevoStock.cantidad, nuevoStock.gramosDisponibles, item.productoId);
       }
 
       const { resumen, total: subtotal } = construirResumenConStock(

@@ -9,7 +9,14 @@ import {
   IconX,
 } from './Icons.jsx';
 import { api } from '../api.js';
-import { calcularDescuento, formatARS, iniciales } from '../utils.js';
+import {
+  calcularDescuento,
+  esProductoPeso,
+  formatARS,
+  iniciales,
+  stockDisponible,
+  subtotalProducto,
+} from '../utils.js';
 
 export const METODOS_PAGO = [
   'Efectivo',
@@ -24,6 +31,7 @@ export const METODOS_PAGO = [
 export default function Carrito({
   carrito,
   onCambiarCantidad,
+  onFijarCantidad,
   onQuitar,
   onVaciar,
   onConfirmar,
@@ -46,8 +54,24 @@ export default function Carrito({
     !esFiado ||
     (clienteSeleccion !== '' && (clienteSeleccion !== '__nuevo' || clienteNuevo.trim() !== ''));
 
-  const subtotal = carrito.reduce((suma, item) => suma + item.producto.precio * item.cantidad, 0);
-  const unidades = carrito.reduce((suma, item) => suma + item.cantidad, 0);
+  const subtotal = carrito.reduce(
+    (suma, item) => suma + subtotalProducto(item.producto, item.cantidad),
+    0
+  );
+  const unidades = carrito.reduce(
+    (suma, item) => suma + (esProductoPeso(item.producto) ? 0 : item.cantidad),
+    0
+  );
+  const gramos = carrito.reduce(
+    (suma, item) => suma + (esProductoPeso(item.producto) ? item.cantidad : 0),
+    0
+  );
+  const etiquetaCantidades = [
+    unidades ? `${unidades} ${unidades === 1 ? 'unidad' : 'unidades'}` : '',
+    gramos ? `${gramos} g` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   const vacio = carrito.length === 0;
   const { importe: descuento, total } = calcularDescuento(subtotal, descuentoTipo, descuentoValor);
   const pagoConNumero = Number(pagoCon);
@@ -114,7 +138,7 @@ export default function Carrito({
             <p>
               {vacio
                 ? 'Agregá productos o escaneá un código'
-                : `${unidades} ${unidades === 1 ? 'unidad' : 'unidades'} · ${carrito.length} producto${carrito.length === 1 ? '' : 's'}`}
+                : `${etiquetaCantidades} · ${carrito.length} producto${carrito.length === 1 ? '' : 's'}`}
             </p>
           </div>
         </div>
@@ -142,64 +166,86 @@ export default function Carrito({
       ) : (
         <>
           <div className="cart-items carrito-panel-items">
-            {carrito.map(({ producto, cantidad }) => (
-              <div key={producto.id} className="cart-item">
-                <div className="cart-thumb">
-                  {producto.imagen ? (
-                    <img src={producto.imagen} alt={producto.nombre} />
-                  ) : (
-                    <div className="cart-thumb-placeholder">
-                      <span>{iniciales(producto.nombre)}</span>
-                      <IconImage size={14} />
-                    </div>
-                  )}
-                </div>
+            {carrito.map(({ producto, cantidad }) => {
+              const peso = esProductoPeso(producto);
+              const paso = peso ? 100 : 1;
+              const maximo = stockDisponible(producto);
+              return (
+                <div key={producto.id} className="cart-item">
+                  <div className="cart-thumb">
+                    {producto.imagen ? (
+                      <img src={producto.imagen} alt={producto.nombre} />
+                    ) : (
+                      <div className="cart-thumb-placeholder">
+                        <span>{iniciales(producto.nombre)}</span>
+                        <IconImage size={14} />
+                      </div>
+                    )}
+                  </div>
 
-                <div className="cart-info">
-                  <h3 title={producto.nombre}>{producto.nombre}</h3>
-                  <p>{producto.categoria} · {formatARS(producto.precio)}</p>
-                  <span className="cart-stock">Stock: {producto.cantidad}</span>
-                </div>
+                  <div className="cart-info">
+                    <h3 title={producto.nombre}>{producto.nombre}</h3>
+                    <p>
+                      {producto.categoria} ·{' '}
+                      {peso && producto.precioPorGramo
+                        ? `${formatARS(producto.precioPorGramo)} / g`
+                        : formatARS(producto.precio)}
+                    </p>
+                    <span className="cart-stock">
+                      Stock:{' '}
+                      {peso
+                        ? `${producto.cantidad} u. · ${producto.gramosDisponibles ?? 0} g`
+                        : producto.cantidad}
+                    </span>
+                  </div>
 
-                <div className="cart-subtotal">
-                  <strong>{formatARS(producto.precio * cantidad)}</strong>
-                  <button
-                    type="button"
-                    className="icon-button danger"
-                    aria-label={`Eliminar ${producto.nombre} del carrito`}
-                    onClick={() => onQuitar(producto.id)}
-                  >
-                    <IconX size={15} />
-                  </button>
-                </div>
+                  <div className="cart-subtotal">
+                    <strong>{formatARS(subtotalProducto(producto, cantidad))}</strong>
+                    <button
+                      type="button"
+                      className="icon-button danger"
+                      aria-label={`Eliminar ${producto.nombre} del carrito`}
+                      onClick={() => onQuitar(producto.id)}
+                    >
+                      <IconX size={15} />
+                    </button>
+                  </div>
 
-                <div className="stepper">
-                  <button
-                    type="button"
-                    aria-label={`Quitar una unidad de ${producto.nombre}`}
-                    onClick={() => onCambiarCantidad(producto.id, -1)}
-                    disabled={cantidad <= 1}
-                  >
-                    <IconMinus size={14} />
-                  </button>
-                  <span>{cantidad}</span>
-                  <button
-                    type="button"
-                    aria-label={`Agregar una unidad de ${producto.nombre}`}
-                    onClick={() => onCambiarCantidad(producto.id, 1)}
-                    disabled={cantidad >= producto.cantidad}
-                  >
-                    <IconPlus size={14} />
-                  </button>
+                  <div className="stepper">
+                    <button
+                      type="button"
+                      aria-label={`Quitar ${peso ? '100 gramos' : 'una unidad'} de ${producto.nombre}`}
+                      onClick={() => onCambiarCantidad(producto.id, -paso)}
+                      disabled={cantidad <= 1}
+                    >
+                      <IconMinus size={14} />
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      max={maximo}
+                      value={cantidad}
+                      aria-label={`${peso ? 'Gramos' : 'Cantidad'} de ${producto.nombre} en el carrito`}
+                      onChange={(e) => onFijarCantidad(producto.id, e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      aria-label={`Agregar ${peso ? '100 gramos' : 'una unidad'} de ${producto.nombre}`}
+                      onClick={() => onCambiarCantidad(producto.id, paso)}
+                      disabled={cantidad >= maximo}
+                    >
+                      <IconPlus size={14} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="carrito-panel-summary">
             <div className="summary-row">
               <span>Artículos</span>
-              <span>{unidades}</span>
+              <span>{etiquetaCantidades}</span>
             </div>
             <div className="summary-row">
               <span>Productos distintos</span>

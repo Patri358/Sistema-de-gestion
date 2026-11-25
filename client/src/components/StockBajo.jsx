@@ -1,9 +1,8 @@
-import { useState } from 'react';
-import EditarProductoModal from './EditarProductoModal.jsx';
-import { IconAlert, IconCheck, IconEdit, IconTag } from './Icons.jsx';
-import { formatARS } from '../utils.js';
+import { IconAlert, IconCheck, IconTag } from './Icons.jsx';
+import { esProductoPeso, formatARS } from '../utils.js';
 
-function StockBajoCard({ producto, onEditar, puedeEditar }) {
+function StockBajoCard({ producto }) {
+  const peso = esProductoPeso(producto);
   const sinStock = producto.cantidad <= 0;
   const minimo = Number(producto.stock_minimo ?? 10);
   const faltan = Math.max(0, minimo - producto.cantidad);
@@ -23,10 +22,17 @@ function StockBajoCard({ producto, onEditar, puedeEditar }) {
       </div>
 
       <div className="stock-card-data">
-        <strong>{formatARS(producto.precio)}</strong>
+        <strong>
+          {formatARS(producto.precio)}
+          {peso && producto.precioPorGramo ? <small> · {formatARS(producto.precioPorGramo)}/g</small> : null}
+        </strong>
         <span className={`chip ${sinStock ? 'stock-out' : 'stock-low'}`}>
           <IconAlert size={12} />
-          {sinStock ? 'Sin stock' : `${producto.cantidad} en stock`}
+          {sinStock
+            ? 'Sin stock'
+            : peso
+              ? `${producto.cantidad} u. · ${producto.gramosDisponibles ?? 0} g`
+              : `${producto.cantidad} en stock`}
         </span>
       </div>
 
@@ -44,26 +50,12 @@ function StockBajoCard({ producto, onEditar, puedeEditar }) {
         <span className="barcode" title="Código de barra">
           {producto.codigo_barras || 'Sin código'}
         </span>
-        {puedeEditar && (
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => onEditar(producto)}>
-            <IconEdit size={15} />
-            Editar stock
-          </button>
-        )}
       </div>
     </article>
   );
 }
 
-export default function StockBajo({
-  datos,
-  cargando,
-  categorias,
-  onEditar,
-  onIrAInventario,
-  puedeEditar = true,
-}) {
-  const [productoEditando, setProductoEditando] = useState(null);
+export default function StockBajo({ datos, cargando, onIrAInventario }) {
   const productos = datos?.productos ?? [];
   const sinStock = productos.filter((producto) => producto.cantidad <= 0).length;
 
@@ -72,11 +64,7 @@ export default function StockBajo({
       <div className="page-head">
         <div>
           <h1>Stock bajo</h1>
-          <p>
-            {puedeEditar
-              ? 'Productos por debajo del stock mínimo configurado. Podés ajustarlo desde Editar producto.'
-              : 'Productos por debajo del stock mínimo configurado. Avisá al administrador para reponerlos.'}
-          </p>
+          <p>Productos por debajo del stock mínimo configurado. Avisá al administrador para reponerlos.</p>
         </div>
         <span className="count-pill">
           {productos.length} {productos.length === 1 ? 'producto' : 'productos'} en alerta
@@ -115,24 +103,10 @@ export default function StockBajo({
 
           <div className="stock-bajo-grid">
             {productos.map((producto) => (
-              <StockBajoCard
-                key={producto.id}
-                producto={producto}
-                onEditar={setProductoEditando}
-                puedeEditar={puedeEditar}
-              />
+              <StockBajoCard key={producto.id} producto={producto} />
             ))}
           </div>
         </>
-      )}
-
-      {puedeEditar && productoEditando && (
-        <EditarProductoModal
-          producto={productoEditando}
-          categorias={categorias}
-          onGuardar={onEditar}
-          onCerrar={() => setProductoEditando(null)}
-        />
       )}
     </div>
   );

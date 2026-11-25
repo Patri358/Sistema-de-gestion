@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconAlert, IconImage, IconPlus, IconTag, IconX } from './Icons.jsx';
+import { IconAlert, IconImage, IconTag, IconX } from './Icons.jsx';
 import { comprimirImagen } from '../utils.js';
 
 const FORM_VACIO = {
@@ -9,14 +9,17 @@ const FORM_VACIO = {
   cantidad: '',
   codigo_barras: '',
   imagen: null,
+  tipo: 'unidad',
+  gramosPorUnidad: '',
 };
 
-export default function ProductoForm({ categorias, onCrear }) {
+export default function ProductoForm({ categorias, onCrear, onCerrar }) {
   const [form, setForm] = useState(FORM_VACIO);
   const [error, setError] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [procesandoImagen, setProcesandoImagen] = useState(false);
   const inputImagen = useRef(null);
+  const esPeso = form.tipo === 'peso';
 
   useEffect(() => {
     setForm((actual) => {
@@ -79,6 +82,13 @@ export default function ProductoForm({ categorias, onCrear }) {
       setError('Ingresá una cantidad válida');
       return;
     }
+    if (esPeso) {
+      const gramos = Number(form.gramosPorUnidad);
+      if (form.gramosPorUnidad === '' || !Number.isInteger(gramos) || gramos <= 0) {
+        setError('Los gramos por unidad deben ser un número entero mayor que 0');
+        return;
+      }
+    }
 
     setEnviando(true);
     try {
@@ -89,8 +99,11 @@ export default function ProductoForm({ categorias, onCrear }) {
         cantidad: Number(form.cantidad),
         codigo_barras: form.codigo_barras.trim(),
         imagen: form.imagen,
+        tipo: form.tipo,
+        gramosPorUnidad: esPeso ? Number(form.gramosPorUnidad) : null,
       });
       setForm(FORM_VACIO);
+      onCerrar?.();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -99,17 +112,6 @@ export default function ProductoForm({ categorias, onCrear }) {
   }
 
   return (
-    <section className="card form-card producto-form-card">
-      <div className="card-title">
-        <span className="icon-badge">
-          <IconPlus size={18} />
-        </span>
-        <div>
-          <h2>Nuevo producto</h2>
-          <p className="card-sub">Usá una categoría ya creada y completá los datos del producto.</p>
-        </div>
-      </div>
-
       <form onSubmit={handleSubmit} className="formulario producto-form">
         <div className="producto-form-grid">
           <div className="field producto-form-nombre">
@@ -148,13 +150,44 @@ export default function ProductoForm({ categorias, onCrear }) {
 
             {categorias.length === 0 && (
               <div className="inline-notice">
-                <span>Primero creá una categoría con el formulario de abajo.</span>
+                <span>Primero creá una categoría con el botón “Crear categoría”.</span>
               </div>
             )}
           </div>
 
           <div className="field">
-            <label htmlFor="precio">Precio</label>
+            <label htmlFor="tipo">Tipo de venta</label>
+            <select
+              id="tipo"
+              value={form.tipo}
+              onChange={(e) => setCampo('tipo', e.target.value)}
+            >
+              <option value="unidad">Venta por unidad</option>
+              <option value="peso">Venta por peso</option>
+            </select>
+          </div>
+
+          {esPeso && (
+            <div className="field">
+              <label htmlFor="gramos-por-unidad">Gramos por unidad</label>
+              <input
+                id="gramos-por-unidad"
+                type="number"
+                min="1"
+                step="1"
+                value={form.gramosPorUnidad}
+                placeholder="Ej: 1000"
+                onChange={(e) => setCampo('gramosPorUnidad', e.target.value)}
+                required
+              />
+              <small className="field-hint">
+                Ej: 3 unidades de 1000 g = 3000 g disponibles.
+              </small>
+            </div>
+          )}
+
+          <div className="field">
+            <label htmlFor="precio">{esPeso ? 'Precio por unidad' : 'Precio'}</label>
             <input
               id="precio"
               type="number"
@@ -168,7 +201,7 @@ export default function ProductoForm({ categorias, onCrear }) {
           </div>
 
           <div className="field">
-            <label htmlFor="cantidad">Cantidad</label>
+            <label htmlFor="cantidad">{esPeso ? 'Unidades en stock' : 'Cantidad'}</label>
             <input
               id="cantidad"
               type="number"
@@ -256,6 +289,5 @@ export default function ProductoForm({ categorias, onCrear }) {
           </div>
         </div>
       </form>
-    </section>
   );
 }

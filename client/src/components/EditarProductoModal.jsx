@@ -13,6 +13,10 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
     codigo_barras: producto.codigo_barras || '',
     imagen: producto.imagen || null,
     activo: Number(producto.activo ?? 1) !== 0,
+    tipo: producto.tipo === 'peso' ? 'peso' : 'unidad',
+    gramosPorUnidad: String(
+      producto.gramosPorUnidad ?? producto.gramos_por_unidad ?? ''
+    ),
   });
   const [motivoStock, setMotivoStock] = useState('');
   const [error, setError] = useState('');
@@ -20,6 +24,9 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
   const [procesandoImagen, setProcesandoImagen] = useState(false);
   const inputImagen = useRef(null);
   const cantidadNumero = Number(form.cantidad);
+  const esPeso = form.tipo === 'peso';
+  const gramosOriginales = producto.gramosPorUnidad ?? producto.gramos_por_unidad ?? '';
+  const gramosCambian = esPeso && form.gramosPorUnidad !== String(gramosOriginales);
   const stockCambia =
     form.cantidad !== '' &&
     Number.isInteger(cantidadNumero) &&
@@ -84,6 +91,17 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
       setError('La cantidad debe ser un número entero mayor o igual a 0');
       return;
     }
+    if (esPeso) {
+      const gramos = Number(form.gramosPorUnidad);
+      if (
+        form.gramosPorUnidad === '' ||
+        !Number.isInteger(gramos) ||
+        gramos <= 0
+      ) {
+        setError('Los gramos por unidad deben ser un número entero mayor que 0');
+        return;
+      }
+    }
     if (
       form.stock_minimo === '' ||
       !Number.isInteger(Number(form.stock_minimo)) ||
@@ -108,7 +126,9 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
         codigo_barras: form.codigo_barras.trim(),
         imagen: form.imagen,
         activo: form.activo,
-        motivoStock: stockCambia ? motivoStock.trim() : '',
+        tipo: form.tipo,
+        gramosPorUnidad: esPeso ? Number(form.gramosPorUnidad) : null,
+        motivoStock: stockCambia || gramosCambian ? motivoStock.trim() : '',
       });
       onCerrar();
     } catch (err) {
@@ -160,9 +180,39 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
           </select>
         </div>
 
+        <div className="field">
+          <label htmlFor="editar-tipo">Tipo de venta</label>
+          <select
+            id="editar-tipo"
+            value={form.tipo}
+            onChange={(e) => setCampo('tipo', e.target.value)}
+          >
+            <option value="unidad">Venta por unidad</option>
+            <option value="peso">Venta por peso</option>
+          </select>
+        </div>
+
+        {esPeso && (
+          <div className="field">
+            <label htmlFor="editar-gramos">Gramos por unidad</label>
+            <input
+              id="editar-gramos"
+              type="number"
+              min="1"
+              step="1"
+              value={form.gramosPorUnidad}
+              onChange={(e) => setCampo('gramosPorUnidad', e.target.value)}
+              required
+            />
+            <small className="field-hint">
+              El precio de arriba es por unidad completa; el precio por gramo se calcula automáticamente.
+            </small>
+          </div>
+        )}
+
         <div className="form-row form-row-3">
           <div className="field">
-            <label htmlFor="editar-precio">Precio</label>
+            <label htmlFor="editar-precio">{esPeso ? 'Precio por unidad' : 'Precio'}</label>
             <input
               id="editar-precio"
               type="number"
@@ -174,7 +224,7 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
             />
           </div>
           <div className="field">
-            <label htmlFor="editar-cantidad">Stock</label>
+            <label htmlFor="editar-cantidad">{esPeso ? 'Unidades en stock' : 'Stock'}</label>
             <input
               id="editar-cantidad"
               type="number"

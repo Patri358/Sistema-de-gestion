@@ -24,7 +24,7 @@ export default function Modal({ titulo, subtitulo, icono, size, onCerrar, childr
       }}
     >
       <div
-        className={`modal ${size === 'lg' ? 'modal-lg' : ''}`}
+        className={`modal ${size === 'lg' ? 'modal-lg' : ''} ${size === 'xl' ? 'modal-xl' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"

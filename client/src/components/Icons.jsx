@@ -286,3 +286,32 @@ export function IconLock(props) {
     </Svg>
   );
 }
+
+export function IconCalendar(props) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="5" width="18" height="16" rx="2.5" />
+      <path d="M3 10h18M8 3v4M16 3v4" />
+    </Svg>
+  );
+}
+
+export function IconTruck(props) {
+  return (
+    <Svg {...props}>
+      <path d="M2.5 6.5h11v10h-11z" />
+      <path d="M13.5 10h3.8l3.2 3.4v3.1h-7z" />
+      <circle cx="7" cy="18" r="1.8" />
+      <circle cx="17.5" cy="18" r="1.8" />
+    </Svg>
+  );
+}
+
+export function IconSend(props) {
+  return (
+    <Svg {...props}>
+      <path d="M21 3 10.5 13.5" />
+      <path d="M21 3 14.5 21l-4-7.5L3 9.5 21 3Z" />
+    </Svg>
+  );
+}

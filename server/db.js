@@ -34,7 +34,10 @@ db.exec(`
     stock_minimo INTEGER NOT NULL DEFAULT 10 CHECK (stock_minimo >= 0),
     imagen TEXT,
     codigo_barras TEXT UNIQUE,
-    activo INTEGER NOT NULL DEFAULT 1
+    activo INTEGER NOT NULL DEFAULT 1,
+    tipo TEXT NOT NULL DEFAULT 'unidad' CHECK (tipo IN ('unidad', 'peso')),
+    gramos_por_unidad INTEGER CHECK (gramos_por_unidad IS NULL OR gramos_por_unidad > 0),
+    gramos_disponibles INTEGER CHECK (gramos_disponibles IS NULL OR gramos_disponibles >= 0)
   );
 
   CREATE TABLE IF NOT EXISTS ventas (
@@ -101,6 +104,30 @@ db.exec(`
     creado_en TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS proveedores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    razon_social TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    telefono TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    rubro TEXT NOT NULL DEFAULT '',
+    descripcion TEXT NOT NULL DEFAULT '',
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS proveedor_productos (
+    proveedor_id INTEGER NOT NULL,
+    producto_id INTEGER NOT NULL,
+    precio_compra REAL NOT NULL DEFAULT 0 CHECK (precio_compra >= 0),
+    PRIMARY KEY (proveedor_id, producto_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS vencimientos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    producto TEXT NOT NULL,
+    fecha TEXT NOT NULL,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS pagos_clientes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cliente_id INTEGER NOT NULL,
@@ -120,6 +147,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_pagos_clientes_cliente ON pagos_clientes (cliente_id, fecha);
   CREATE INDEX IF NOT EXISTS idx_pagos_clientes_venta ON pagos_clientes (venta_id);
   CREATE INDEX IF NOT EXISTS idx_pagos_clientes_caja ON pagos_clientes (caja_id, fecha);
+  CREATE INDEX IF NOT EXISTS idx_proveedor_productos_proveedor
+    ON proveedor_productos (proveedor_id);
+  CREATE INDEX IF NOT EXISTS idx_proveedor_productos_producto
+    ON proveedor_productos (producto_id);
+  CREATE INDEX IF NOT EXISTS idx_vencimientos_fecha ON vencimientos (fecha);
 `);
 
 function asegurarColumna(tabla, columna, definicion) {
@@ -131,6 +163,14 @@ function asegurarColumna(tabla, columna, definicion) {
 
 asegurarColumna('productos', 'activo', 'INTEGER NOT NULL DEFAULT 1');
 asegurarColumna('productos', 'stock_minimo', 'INTEGER NOT NULL DEFAULT 10');
+asegurarColumna('productos', 'tipo', "TEXT NOT NULL DEFAULT 'unidad'");
+asegurarColumna('productos', 'gramos_por_unidad', 'INTEGER');
+asegurarColumna('productos', 'gramos_disponibles', 'INTEGER');
+db.exec(
+  `UPDATE productos
+   SET gramos_disponibles = gramos_por_unidad
+   WHERE tipo = 'peso' AND cantidad > 0 AND gramos_por_unidad > 0 AND gramos_disponibles IS NULL`
+);
 asegurarColumna('ventas', 'cliente', 'TEXT');
 asegurarColumna('ventas', 'cliente_id', 'INTEGER');
 asegurarColumna('ventas', 'fiado', 'INTEGER NOT NULL DEFAULT 0');
@@ -139,6 +179,13 @@ asegurarColumna('ventas', 'descuento_tipo', 'TEXT');
 asegurarColumna('ventas', 'descuento_valor', 'REAL NOT NULL DEFAULT 0');
 asegurarColumna('ventas', 'pago_con', 'REAL');
 asegurarColumna('ventas', 'vuelto', 'REAL');
+asegurarColumna('vencimientos', 'producto_id', 'INTEGER');
+db.exec(
+  `UPDATE vencimientos
+   SET producto_id = (SELECT id FROM productos WHERE nombre = vencimientos.producto COLLATE NOCASE)
+   WHERE producto_id IS NULL`
+);
+db.exec('CREATE INDEX IF NOT EXISTS idx_vencimientos_producto ON vencimientos (producto_id)');
 
 const cajasSql = db
   .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cajas'")
