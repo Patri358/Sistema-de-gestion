@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import GraficoVentas from './GraficoVentas.jsx';
+import GraficoLineas from './GraficoLineas.jsx';
+import GraficoTorta from './GraficoTorta.jsx';
 import EditarVentaModal from './EditarVentaModal.jsx';
 import {
+  IconAlert,
   IconBox,
+  IconChart,
   IconChevron,
   IconDownload,
   IconEdit,
@@ -85,18 +88,28 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
   const unidades = datos?.unidades ?? 0;
   const series = datos?.series ?? [];
   const ticketPromedio = cantidadVentas > 0 ? totalPeriodo / cantidadVentas : 0;
-  const nombreDetalle = periodo === 'dia' ? 'Detalle del día' : periodo === 'mes' ? 'Detalle del mes' : 'Detalle del año';
+  const nombreDetalle =
+    periodo === 'dia'
+      ? 'Detalles de ventas del día'
+      : periodo === 'mes'
+        ? 'Detalles de ventas del mes'
+        : 'Detalles de ventas del año';
+  const masVendidos = datos?.masVendidos ?? [];
+  const mediosPago = datos?.mediosPago ?? [];
+  const vencidos = datos?.vencidos ?? [];
+  const etiquetaRotacion =
+    periodo === 'dia' ? 'horas' : periodo === 'mes' ? 'días' : 'meses';
 
   return (
     <div>
       <div className="page-head">
         <div>
-          <h1>Ventas</h1>
-          <p>Consultá las ventas por día, mes o año, el total ganado y cómo se distribuyeron.</p>
+          <h1>Estadísticas</h1>
+          <p>Consultá la evolución de las ventas, los productos más vendidos y la rotación del stock.</p>
         </div>
 
         <div className="ventas-controls">
-          <div className="periodo-selector" role="group" aria-label="Período de las ventas">
+          <div className="periodo-selector" role="group" aria-label="Período de las estadísticas">
             {PERIODOS.map((opcion) => (
               <button
                 key={opcion.id}
@@ -202,9 +215,116 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
         </div>
       )}
 
-      <GraficoVentas series={series} periodo={periodo} etiqueta={etiqueta} cargando={cargando} />
+      <section className="card stats-panel" id="stats-picos-card">
+        <div className="stats-panel-head">
+          <span className="stat-icon blue">
+            <IconChart size={20} />
+          </span>
+          <div>
+            <h2>Picos de ventas</h2>
+            <p>Movimiento por {etiquetaRotacion} · {etiqueta}</p>
+          </div>
+        </div>
+        <GraficoLineas series={series} periodo={periodo} etiqueta={etiqueta} cargando={cargando} />
+      </section>
 
-      <div className="card ventas-card">
+      <div className="stats-sections">
+        <section className="card stats-panel" id="stats-productos-estrellas">
+          <div className="stats-panel-head">
+            <span className="stat-icon amber">
+              <IconBox size={20} />
+            </span>
+            <div>
+              <h2>Productos estrellas</h2>
+              <p>Top 10 por unidades vendidas y facturación</p>
+            </div>
+          </div>
+          {cargando ? (
+            <div className="chart-empty">Cargando...</div>
+          ) : masVendidos.length ? (
+            <div className="tabla-scroll">
+              <table className="stats-table">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th>Unidades</th>
+                    <th>Facturación</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {masVendidos.map((producto) => (
+                    <tr key={`estrella-${producto.productoId ?? producto.nombre}`}>
+                      <td>{producto.nombre}</td>
+                      <td>{producto.cantidad}</td>
+                      <td>{formatARS(producto.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="chart-empty">Sin productos vendidos en el período.</div>
+          )}
+        </section>
+
+        <section className="card stats-panel" id="stats-medios-pago-card">
+          <div className="stats-panel-head">
+            <span className="stat-icon">
+              <IconWallet size={20} />
+            </span>
+            <div>
+              <h2>Medios de pago</h2>
+              <p>Distribución de la facturación (sin fiado)</p>
+            </div>
+          </div>
+          <GraficoTorta mediosPago={mediosPago} cargando={cargando} />
+        </section>
+
+        <section className="card stats-panel" id="stats-vencidos">
+          <div className="stats-panel-head">
+            <span className="stat-icon red">
+              <IconAlert size={20} />
+            </span>
+            <div>
+              <h2>Historial de productos que más se vencen</h2>
+              <p>Los 10 más vencidos · todo el historial</p>
+            </div>
+          </div>
+          {cargando ? (
+            <div className="chart-empty">Cargando...</div>
+          ) : vencidos.length ? (
+            <div className="tabla-scroll">
+              <table className="stats-table">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th>Unidades vencidas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {vencidos.map((producto) => (
+                    <tr key={`vencido-${producto.productoId ?? producto.producto}`}>
+                      <td>{producto.producto}</td>
+                      <td>{producto.unidades}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="chart-empty">Sin bajas por vencimiento registradas.</div>
+          )}
+        </section>
+      </div>
+
+      <details className="detalle-periodo" id="stats-detalle">
+        <summary>
+          <IconChevron size={18} />
+          <span>{nombreDetalle}</span>
+          <small>{etiqueta}</small>
+        </summary>
+
+        <div className="card ventas-card">
         <div className="ventas-card-head">
           <h2>{nombreDetalle}</h2>
           <span>{etiqueta}</span>
@@ -362,7 +482,8 @@ export default function Ventas({ refreshKey, onEditarVenta }) {
             })}
           </div>
         )}
-      </div>
+        </div>
+      </details>
 
       {ventaEditando && (
         <EditarVentaModal

@@ -18,9 +18,9 @@ import {
   IconAlert,
   IconBox,
   IconCalendar,
+  IconChart,
   IconHistory,
   IconLogout,
-  IconReceipt,
   IconSettings,
   IconStore,
   IconTag,
@@ -41,13 +41,30 @@ const TABS = [
   { id: 'inventario', etiqueta: 'Inventario', Icono: IconBox },
   { id: 'stock-bajo', etiqueta: 'Stock bajo', Icono: IconAlert },
   { id: 'movimientos', etiqueta: 'Movimientos', Icono: IconHistory },
-  { id: 'ventas', etiqueta: 'Ventas', Icono: IconReceipt },
+  { id: 'estadisticas', etiqueta: 'Estadísticas', Icono: IconChart },
   { id: 'clientes', etiqueta: 'Clientes', Icono: IconUsers },
   { id: 'caja', etiqueta: 'Caja', Icono: IconWallet },
   { id: 'categorias', etiqueta: 'Productos', Icono: IconTag },
   { id: 'proveedores', etiqueta: 'Proveedores', Icono: IconTruck },
   { id: 'vencimientos', etiqueta: 'Vencimientos', Icono: IconCalendar },
 ];
+
+const SECCIONES_EMPLEADO = [
+  'inventario',
+  'stock-bajo',
+  'clientes',
+  'caja',
+  'vencimientos',
+];
+
+function seccionesPermitidas(usuario) {
+  if (!usuario || usuario.rol === 'admin') return TABS.map(({ id }) => id);
+  if (usuario.rol === 'empleado' || usuario.rol !== 'encargado') return SECCIONES_EMPLEADO;
+  const guardadas = Array.isArray(usuario.permisos) ? usuario.permisos : [];
+  return TABS.map(({ id }) => id).filter(
+    (id) => SECCIONES_EMPLEADO.includes(id) || guardadas.includes(id)
+  );
+}
 
 function fechaISO(fecha) {
   const anio = fecha.getFullYear();
@@ -142,11 +159,8 @@ export default function App() {
   }, []);
 
   const esAdmin = sesion?.rol === 'admin';
-  const tabsVisibles = TABS.filter(
-    ({ id }) =>
-      esAdmin ||
-      ['inventario', 'stock-bajo', 'caja', 'clientes', 'vencimientos'].includes(id)
-  );
+  const seccionesVisibles = seccionesPermitidas(sesion);
+  const tabsVisibles = TABS.filter(({ id }) => seccionesVisibles.includes(id));
 
   useEffect(() => {
     if (!leerToken()) {
@@ -847,7 +861,7 @@ export default function App() {
 
         {tab === 'movimientos' && <MovimientosStock refreshKey={refreshKey} />}
 
-        {tab === 'ventas' && <Ventas refreshKey={refreshKey} onEditarVenta={editarVenta} />}
+        {tab === 'estadisticas' && <Ventas refreshKey={refreshKey} onEditarVenta={editarVenta} />}
 
         {tab === 'clientes' && (
           <Clientes onAviso={notify} onCambio={() => setRefreshKey((valor) => valor + 1)} />

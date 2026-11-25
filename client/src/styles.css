@@ -443,7 +443,14 @@ select:focus {
   cursor: pointer;
 }
 
+.config-ayuda {
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
 .config-opciones input[type='radio'],
+.config-opciones input[type='checkbox'],
 .config-row input[type='checkbox'] {
   width: 16px;
   height: 16px;
@@ -4294,6 +4301,11 @@ select:focus {
   color: var(--muted);
 }
 
+.config-rol.encargado {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
 .config-usuario-acciones {
   display: flex;
   gap: 4px;
@@ -5520,5 +5532,134 @@ select:focus {
 
   .config-nav-item {
     min-width: 170px;
+  }
+}
+
+.stat-icon.red {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.stats-panel {
+  padding: 18px;
+  margin-bottom: 18px;
+}
+
+.stats-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.stats-panel-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.stats-panel-head p {
+  margin: 2px 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.estadistica-chart {
+  position: relative;
+  height: 280px;
+}
+
+.estadistica-chart.torta {
+  height: 260px;
+}
+
+.stats-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.stats-sections .stats-panel {
+  margin-bottom: 0;
+}
+
+.tabla-scroll {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.stats-table th,
+.stats-table td {
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stats-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stats-table th:not(:first-child),
+.stats-table td:not(:first-child) {
+  text-align: right;
+}
+
+.detalle-periodo {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  margin-bottom: 18px;
+}
+
+.detalle-periodo > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+}
+
+.detalle-periodo > summary::-webkit-details-marker {
+  display: none;
+}
+
+.detalle-periodo > summary svg {
+  transition: transform 0.2s ease;
+}
+
+.detalle-periodo[open] > summary svg {
+  transform: rotate(90deg);
+}
+
+.detalle-periodo > summary small {
+  margin-left: auto;
+  color: var(--muted);
+  font-weight: 400;
+  text-transform: capitalize;
+}
+
+.detalle-periodo .ventas-card {
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 14px 14px;
+  box-shadow: none;
+}
+
+@media (max-width: 900px) {
+  .stats-sections {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

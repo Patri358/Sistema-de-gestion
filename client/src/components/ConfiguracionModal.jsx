@@ -15,6 +15,26 @@ import {
   IconUsers,
 } from './Icons.jsx';
 
+const PERMISOS_USUARIO = [
+  { id: 'inventario', etiqueta: 'Inventario' },
+  { id: 'stock-bajo', etiqueta: 'Stock bajo' },
+  { id: 'movimientos', etiqueta: 'Movimientos' },
+  { id: 'estadisticas', etiqueta: 'Estadísticas' },
+  { id: 'clientes', etiqueta: 'Clientes' },
+  { id: 'caja', etiqueta: 'Caja' },
+  { id: 'categorias', etiqueta: 'Productos' },
+  { id: 'proveedores', etiqueta: 'Proveedores' },
+  { id: 'vencimientos', etiqueta: 'Vencimientos' },
+];
+
+const PERMISOS_EMPLEADO = [
+  'inventario',
+  'stock-bajo',
+  'clientes',
+  'caja',
+  'vencimientos',
+];
+
 const SECCIONES = [
   {
     id: 'apariencia',
@@ -45,7 +65,9 @@ const SECCIONES = [
 ];
 
 function rolEtiqueta(rol) {
-  return rol === 'admin' ? 'Admin' : 'Empleado';
+  if (rol === 'admin') return 'Admin';
+  if (rol === 'encargado') return 'Encargado';
+  return 'Empleado';
 }
 
 export default function ConfiguracionModal({
@@ -78,6 +100,7 @@ export default function ConfiguracionModal({
   const [password, setPassword] = useState('');
   const [confirmarPassword, setConfirmarPassword] = useState('');
   const [rol, setRol] = useState('empleado');
+  const [permisos, setPermisos] = useState([...PERMISOS_EMPLEADO]);
   const [editandoId, setEditandoId] = useState(null);
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
@@ -92,6 +115,13 @@ export default function ConfiguracionModal({
 
   function alternarAviso(valor) {
     setAvisos((actual) =>
+      actual.includes(valor) ? actual.filter((item) => item !== valor) : [...actual, valor]
+    );
+  }
+
+  function alternarPermiso(valor) {
+    if (PERMISOS_EMPLEADO.includes(valor)) return;
+    setPermisos((actual) =>
       actual.includes(valor) ? actual.filter((item) => item !== valor) : [...actual, valor]
     );
   }
@@ -114,6 +144,7 @@ export default function ConfiguracionModal({
     setPassword('');
     setConfirmarPassword('');
     setRol('empleado');
+    setPermisos([...PERMISOS_EMPLEADO]);
     setEditandoId(null);
     setError('');
   }
@@ -123,6 +154,11 @@ export default function ConfiguracionModal({
     setPassword('');
     setConfirmarPassword('');
     setRol(usuario.rol);
+    setPermisos(
+      usuario.rol === 'encargado' && Array.isArray(usuario.permisos) && usuario.permisos.length
+        ? PERMISOS_USUARIO.filter(({ id }) => usuario.permisos.includes(id)).map(({ id }) => id)
+        : [...PERMISOS_EMPLEADO]
+    );
     setEditandoId(usuario.id);
     setError('');
   }
@@ -148,6 +184,7 @@ export default function ConfiguracionModal({
     const datos = {
       nombre: nombre.trim(),
       rol,
+      ...(rol === 'encargado' ? { permisos } : {}),
       ...(password ? { password, confirmarPassword } : {}),
     };
 
@@ -396,10 +433,15 @@ export default function ConfiguracionModal({
                     <select
                       id="usuario-rol"
                       value={rol}
-                      onChange={(event) => setRol(event.target.value)}
+                      onChange={(event) => {
+                        const nuevoRol = event.target.value;
+                        setRol(nuevoRol);
+                        if (nuevoRol === 'encargado') setPermisos([...PERMISOS_EMPLEADO]);
+                      }}
                       disabled={guardando}
                     >
                       <option value="empleado">Empleado</option>
+                      <option value="encargado">Encargado</option>
                       <option value="admin">Admin</option>
                     </select>
                   </div>
@@ -431,6 +473,30 @@ export default function ConfiguracionModal({
                     />
                   </div>
                 </div>
+
+                {rol === 'encargado' && (
+                  <div className="field" id="usuario-permisos-field">
+                    <span className="label">Secciones permitidas</span>
+                    <div className="config-opciones" id="usuario-permisos">
+                      {PERMISOS_USUARIO.map(({ id, etiqueta }) => (
+                        <label key={id} htmlFor={`usuario-permiso-${id}`}>
+                          <input
+                            id={`usuario-permiso-${id}`}
+                            type="checkbox"
+                            checked={permisos.includes(id)}
+                            onChange={() => alternarPermiso(id)}
+                            disabled={guardando || PERMISOS_EMPLEADO.includes(id)}
+                          />
+                          {etiqueta}
+                        </label>
+                      ))}
+                    </div>
+                    <small className="config-ayuda">
+                      Inventario, Stock bajo, Clientes, Caja y Vencimientos siempre quedan
+                      habilitados.
+                    </small>
+                  </div>
+                )}
 
                 {error && (
                   <div className="alert alert-error" role="alert">

@@ -89,7 +89,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_hash TEXT NOT NULL,
-    rol TEXT NOT NULL CHECK (rol IN ('admin', 'empleado')),
+    rol TEXT NOT NULL CHECK (rol IN ('admin', 'empleado', 'encargado')),
+    permisos TEXT,
     creado_en TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -186,6 +187,53 @@ db.exec(
    WHERE producto_id IS NULL`
 );
 db.exec('CREATE INDEX IF NOT EXISTS idx_vencimientos_producto ON vencimientos (producto_id)');
+
+const usuariosSql = db
+  .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'usuarios'")
+  .get()?.sql;
+
+if (!/encargado/i.test(usuariosSql ?? '')) {
+  const tienePermisos = db
+    .prepare('PRAGMA table_info(usuarios)')
+    .all()
+    .some((fila) => fila.name === 'permisos');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`
+      ALTER TABLE usuarios RENAME TO usuarios_legacy;
+      CREATE TABLE usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        password_hash TEXT NOT NULL,
+        rol TEXT NOT NULL CHECK (rol IN ('admin', 'empleado', 'encargado')),
+        permisos TEXT,
+        creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO usuarios (id, nombre, password_hash, rol, permisos, creado_en)
+      SELECT id, nombre, password_hash, rol, ${tienePermisos ? 'permisos' : 'NULL'}, creado_en
+      FROM usuarios_legacy;
+      DROP TABLE usuarios_legacy;
+    `);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+for (const fila of db
+  .prepare('SELECT id, permisos FROM usuarios WHERE permisos IS NOT NULL')
+  .all()) {
+  try {
+    const permisos = JSON.parse(fila.permisos);
+    if (!Array.isArray(permisos) || !permisos.includes('ventas')) continue;
+    const migrados = [...new Set(permisos.map((permiso) => (permiso === 'ventas' ? 'estadisticas' : permiso)))];
+    db.prepare('UPDATE usuarios SET permisos = ? WHERE id = ?').run(
+      JSON.stringify(migrados),
+      fila.id
+    );
+  } catch {}
+}
 
 const cajasSql = db
   .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cajas'")

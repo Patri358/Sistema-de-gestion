@@ -115,12 +115,59 @@ function parseNombreUsuario(raw) {
   return nombre;
 }
 
+const SECCIONES_USUARIO = [
+  'inventario',
+  'stock-bajo',
+  'movimientos',
+  'estadisticas',
+  'clientes',
+  'caja',
+  'categorias',
+  'proveedores',
+  'vencimientos',
+];
+
+const PERMISOS_EMPLEADO = [
+  'inventario',
+  'stock-bajo',
+  'caja',
+  'clientes',
+  'vencimientos',
+];
+
 function parseRolUsuario(raw) {
   const rol = String(raw ?? '');
-  if (!['admin', 'empleado'].includes(rol)) {
-    throw httpError(400, 'El rol debe ser Admin o Empleado');
+  if (!['admin', 'empleado', 'encargado'].includes(rol)) {
+    throw httpError(400, 'El rol debe ser Admin, Encargado o Empleado');
   }
   return rol;
+}
+
+function permisosUsuario(fila) {
+  if (fila?.rol === 'admin') return [...SECCIONES_USUARIO];
+  if (fila?.rol === 'empleado') return [...PERMISOS_EMPLEADO];
+  try {
+    const guardados = JSON.parse(fila?.permisos ?? '[]');
+    if (!Array.isArray(guardados)) return [...PERMISOS_EMPLEADO];
+    return SECCIONES_USUARIO.filter(
+      (seccion) => PERMISOS_EMPLEADO.includes(seccion) || guardados.includes(seccion)
+    );
+  } catch {
+    return [];
+  }
+}
+
+function parsePermisosUsuario(rol, raw) {
+  if (rol !== 'encargado') return null;
+  const valores = Array.isArray(raw) ? raw : [];
+  const permitidos = [...new Set(valores.map((valor) => String(valor)))];
+  const invalidos = permitidos.filter((valor) => !SECCIONES_USUARIO.includes(valor));
+  if (invalidos.length) {
+    throw httpError(400, `Sección no válida: ${invalidos.join(', ')}`);
+  }
+  return SECCIONES_USUARIO.filter(
+    (seccion) => PERMISOS_EMPLEADO.includes(seccion) || permitidos.includes(seccion)
+  );
 }
 
 function parsePasswordUsuario(body, obligatoria = true) {
@@ -133,7 +180,13 @@ function parsePasswordUsuario(body, obligatoria = true) {
 }
 
 function usuarioPublico(fila) {
-  return { id: fila.id, nombre: fila.nombre, rol: fila.rol, creadoEn: fila.creado_en };
+  return {
+    id: fila.id,
+    nombre: fila.nombre,
+    rol: fila.rol,
+    permisos: fila.rol === 'encargado' ? permisosUsuario(fila) : null,
+    creadoEn: fila.creado_en,
+  };
 }
 
 function nombreUsuarioCaja(id) {
@@ -147,7 +200,9 @@ function autenticar(req, _res, next) {
   const datos = verificarToken(token);
   if (!datos) return next(httpError(401, 'Sesión expirada. Iniciá sesión nuevamente.'));
 
-  const usuario = db.prepare('SELECT id, nombre, rol FROM usuarios WHERE id = ?').get(datos.id);
+  const usuario = db
+    .prepare('SELECT id, nombre, rol, permisos FROM usuarios WHERE id = ?')
+    .get(datos.id);
   if (!usuario) return next(httpError(401, 'Usuario no disponible. Iniciá sesión nuevamente.'));
 
   req.usuario = usuario;
@@ -159,6 +214,13 @@ function soloAdmin(req, _res, next) {
     return next(httpError(403, 'No tenés permisos para realizar esta acción'));
   }
   next();
+}
+
+function puedeSeccion(seccion) {
+  return (req, _res, next) => {
+    if (permisosUsuario(req.usuario).includes(seccion)) return next();
+    return next(httpError(403, 'No tenés permisos para realizar esta acción'));
+  };
 }
 
 function localDay(date = new Date()) {
@@ -816,12 +878,14 @@ app.post('/api/login', (req, res, next) => {
 app.use('/api', autenticar);
 
 app.get('/api/sesion', (req, res) => {
-  res.json({ usuario: req.usuario });
+  res.json({ usuario: usuarioPublico(req.usuario) });
 });
 
 app.get('/api/usuarios', soloAdmin, (_req, res) => {
   const usuarios = db
-    .prepare('SELECT id, nombre, rol, creado_en FROM usuarios ORDER BY nombre COLLATE NOCASE ASC')
+    .prepare(
+      'SELECT id, nombre, rol, permisos, creado_en FROM usuarios ORDER BY nombre COLLATE NOCASE ASC'
+    )
     .all()
     .map(usuarioPublico);
   res.json({ usuarios });
@@ -831,13 +895,14 @@ app.post('/api/usuarios', soloAdmin, (req, res, next) => {
   try {
     const nombre = parseNombreUsuario(req.body?.nombre);
     const rol = parseRolUsuario(req.body?.rol);
+    const permisos = parsePermisosUsuario(rol, req.body?.permisos);
     const password = parsePasswordUsuario(req.body, true);
 
     let info;
     try {
       info = db
-        .prepare('INSERT INTO usuarios (nombre, password_hash, rol) VALUES (?, ?, ?)')
-        .run(nombre, hashPassword(password), rol);
+        .prepare('INSERT INTO usuarios (nombre, password_hash, rol, permisos) VALUES (?, ?, ?, ?)')
+        .run(nombre, hashPassword(password), rol, permisos ? JSON.stringify(permisos) : null);
     } catch (error) {
       if (String(error.message).includes('UNIQUE constraint failed')) {
         throw httpError(409, 'Ya existe un usuario con ese nombre');
@@ -862,18 +927,22 @@ app.put('/api/usuarios/:id', soloAdmin, (req, res, next) => {
 
     const nombre = parseNombreUsuario(req.body?.nombre);
     const rol = parseRolUsuario(req.body?.rol);
+    const permisos = parsePermisosUsuario(rol, req.body?.permisos);
     const password = parsePasswordUsuario(req.body, false);
+    const permisosGuardados = permisos ? JSON.stringify(permisos) : null;
 
     try {
       if (password) {
-        db.prepare('UPDATE usuarios SET nombre = ?, rol = ?, password_hash = ? WHERE id = ?').run(
+        db.prepare(
+          'UPDATE usuarios SET nombre = ?, rol = ?, permisos = ?, password_hash = ? WHERE id = ?'
+        ).run(nombre, rol, permisosGuardados, hashPassword(password), id);
+      } else {
+        db.prepare('UPDATE usuarios SET nombre = ?, rol = ?, permisos = ? WHERE id = ?').run(
           nombre,
           rol,
-          hashPassword(password),
+          permisosGuardados,
           id
         );
-      } else {
-        db.prepare('UPDATE usuarios SET nombre = ?, rol = ? WHERE id = ?').run(nombre, rol, id);
       }
     } catch (error) {
       if (String(error.message).includes('UNIQUE constraint failed')) {
@@ -928,7 +997,7 @@ app.get('/api/productos', (req, res) => {
   res.json(productos);
 });
 
-app.get('/api/productos/stock-bajo', (_req, res) => {
+app.get('/api/productos/stock-bajo', puedeSeccion('stock-bajo'), (_req, res) => {
   const productos = db
     .prepare(
       `SELECT * FROM productos
@@ -954,7 +1023,7 @@ app.get('/api/productos/buscar-codigo', (req, res, next) => {
   }
 });
 
-app.get('/api/movimientos-stock', soloAdmin, (req, res, next) => {
+app.get('/api/movimientos-stock', puedeSeccion('movimientos'), (req, res, next) => {
   try {
     const productoIdRaw = String(req.query.productoId ?? '').trim();
     let productoId = null;
@@ -1001,11 +1070,11 @@ app.get('/api/movimientos-stock', soloAdmin, (req, res, next) => {
   }
 });
 
-app.get('/api/caja', (_req, res) => {
+app.get('/api/caja', puedeSeccion('caja'), (_req, res) => {
   res.json(estadoCaja());
 });
 
-app.post('/api/caja/abrir', (req, res, next) => {
+app.post('/api/caja/abrir', puedeSeccion('caja'), (req, res, next) => {
   try {
     const dia = localDay();
     if (cajaAbiertaHoy(dia)) {
@@ -1025,7 +1094,7 @@ app.post('/api/caja/abrir', (req, res, next) => {
   }
 });
 
-app.post('/api/caja/retirar', (req, res, next) => {
+app.post('/api/caja/retirar', puedeSeccion('caja'), (req, res, next) => {
   try {
     const dia = localDay();
     const caja = cajaAbiertaHoy(dia);
@@ -1056,7 +1125,7 @@ app.post('/api/caja/retirar', (req, res, next) => {
   }
 });
 
-app.post('/api/caja/cerrar', (req, res, next) => {
+app.post('/api/caja/cerrar', puedeSeccion('caja'), (req, res, next) => {
   try {
     const dia = localDay();
     const caja = cajaAbiertaHoy(dia);
@@ -1086,7 +1155,7 @@ app.get('/api/categorias', (_req, res) => {
   res.json(categorias);
 });
 
-app.post('/api/categorias', soloAdmin, (req, res, next) => {
+app.post('/api/categorias', puedeSeccion('categorias'), (req, res, next) => {
   try {
     const nombre = parseCategoriaNombre(req.body?.nombre);
     let info;
@@ -1105,7 +1174,7 @@ app.post('/api/categorias', soloAdmin, (req, res, next) => {
   }
 });
 
-app.put('/api/categorias/:id', soloAdmin, (req, res, next) => {
+app.put('/api/categorias/:id', puedeSeccion('categorias'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -1144,7 +1213,7 @@ app.put('/api/categorias/:id', soloAdmin, (req, res, next) => {
   }
 });
 
-app.delete('/api/categorias/:id', soloAdmin, (req, res, next) => {
+app.delete('/api/categorias/:id', puedeSeccion('categorias'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -1170,7 +1239,7 @@ app.delete('/api/categorias/:id', soloAdmin, (req, res, next) => {
   }
 });
 
-app.get('/api/proveedores', soloAdmin, (_req, res, next) => {
+app.get('/api/proveedores', puedeSeccion('proveedores'), (_req, res, next) => {
   try {
     const proveedores = db
       .prepare(
@@ -1187,7 +1256,7 @@ app.get('/api/proveedores', soloAdmin, (_req, res, next) => {
   }
 });
 
-app.get('/api/proveedores/:id', soloAdmin, (req, res, next) => {
+app.get('/api/proveedores/:id', puedeSeccion('proveedores'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -1197,7 +1266,7 @@ app.get('/api/proveedores/:id', soloAdmin, (req, res, next) => {
   }
 });
 
-app.post('/api/proveedores', soloAdmin, (req, res, next) => {
+app.post('/api/proveedores', puedeSeccion('proveedores'), (req, res, next) => {
   try {
     const datos = parseProveedor(req.body);
     let id;
@@ -1232,7 +1301,7 @@ app.post('/api/proveedores', soloAdmin, (req, res, next) => {
   }
 });
 
-app.put('/api/proveedores/:id', soloAdmin, (req, res, next) => {
+app.put('/api/proveedores/:id', puedeSeccion('proveedores'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -1287,7 +1356,10 @@ app.put('/api/proveedores/:id', soloAdmin, (req, res, next) => {
   }
 });
 
-app.put('/api/proveedores/:id/productos/:productoId', soloAdmin, (req, res, next) => {
+app.put(
+  '/api/proveedores/:id/productos/:productoId',
+  puedeSeccion('proveedores'),
+  (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const productoId = Number(req.params.productoId);
@@ -1309,9 +1381,10 @@ app.put('/api/proveedores/:id/productos/:productoId', soloAdmin, (req, res, next
   } catch (error) {
     next(error);
   }
-});
+  }
+);
 
-app.get('/api/vencimientos', (req, res, next) => {
+app.get('/api/vencimientos', puedeSeccion('vencimientos'), (req, res, next) => {
   try {
     const condiciones = [];
     const parametros = [];
@@ -1335,7 +1408,7 @@ app.get('/api/vencimientos', (req, res, next) => {
   }
 });
 
-app.post('/api/vencimientos', (req, res, next) => {
+app.post('/api/vencimientos', puedeSeccion('vencimientos'), (req, res, next) => {
   try {
     const datos = parseVencimiento(req.body);
     const info = db
@@ -1352,7 +1425,7 @@ app.post('/api/vencimientos', (req, res, next) => {
   }
 });
 
-app.delete('/api/vencimientos/:id', (req, res, next) => {
+app.delete('/api/vencimientos/:id', puedeSeccion('vencimientos'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -1385,7 +1458,7 @@ app.put('/api/configuracion/vencimientos', (req, res, next) => {
   }
 });
 
-app.post('/api/productos', soloAdmin, (req, res, next) => {
+app.post('/api/productos', puedeSeccion('categorias'), (req, res, next) => {
   try {
     const producto = parseProducto(req.body);
     let info;
@@ -1434,7 +1507,7 @@ app.post('/api/productos', soloAdmin, (req, res, next) => {
   }
 });
 
-app.put('/api/productos/:id', soloAdmin, (req, res, next) => {
+app.put('/api/productos/:id', puedeSeccion('categorias'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -1487,7 +1560,9 @@ app.put('/api/productos/:id', soloAdmin, (req, res, next) => {
         });
       }
 
-      if (producto.cantidad === 0) borrarVencimientosSiStockCero(id);
+      if (producto.cantidad === 0 && motivoStock !== 'Producto vencido') {
+        borrarVencimientosSiStockCero(id);
+      }
 
       db.exec('COMMIT');
     } catch (error) {
@@ -1504,7 +1579,7 @@ app.put('/api/productos/:id', soloAdmin, (req, res, next) => {
   }
 });
 
-app.delete('/api/productos/:id', soloAdmin, (req, res, next) => {
+app.delete('/api/productos/:id', puedeSeccion('categorias'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
@@ -1595,6 +1670,32 @@ function construirSeries(periodo, valor, ventas) {
   return series;
 }
 
+function resumenMediosPago(ventas) {
+  const acumulado = new Map();
+  for (const venta of ventas) {
+    if (venta.fiado) continue;
+    const actual = acumulado.get(venta.metodoPago) ?? { etiqueta: venta.metodoPago, total: 0, cantidad: 0 };
+    actual.total = round2(actual.total + venta.total);
+    actual.cantidad += 1;
+    acumulado.set(venta.metodoPago, actual);
+  }
+  return [...acumulado.values()].sort((a, b) => b.total - a.total);
+}
+
+function productosMasVencidos() {
+  return db
+    .prepare(
+      `SELECT producto_id AS productoId, producto_nombre AS producto, SUM(-delta) AS unidades
+       FROM movimientos_stock
+       WHERE tipo = 'ajuste' AND motivo = 'Producto vencido' AND delta < 0
+       GROUP BY producto_id, producto_nombre
+       ORDER BY unidades DESC
+       LIMIT 10`
+    )
+    .all()
+    .map((fila) => ({ ...fila, unidades: Number(fila.unidades) }));
+}
+
 function parseVenta(metodoPagoRaw, items) {
   const metodoPago = String(metodoPagoRaw ?? '').trim();
   if (!metodoPago) throw httpError(400, 'Debe elegir un método de pago');
@@ -1664,7 +1765,7 @@ function parsePagoCon(metodoPago, pagoRaw, total) {
   return { pagoCon: round2(pagoCon), vuelto: round2(pagoCon - total) };
 }
 
-app.get('/api/clientes', (_req, res, next) => {
+app.get('/api/clientes', puedeSeccion('clientes'), (_req, res, next) => {
   try {
     res.json(clientesResumen());
   } catch (error) {
@@ -1672,7 +1773,7 @@ app.get('/api/clientes', (_req, res, next) => {
   }
 });
 
-app.get('/api/clientes/:id', (req, res, next) => {
+app.get('/api/clientes/:id', puedeSeccion('clientes'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id de cliente inválido');
@@ -1682,7 +1783,7 @@ app.get('/api/clientes/:id', (req, res, next) => {
   }
 });
 
-app.post('/api/clientes/:id/pagos', (req, res, next) => {
+app.post('/api/clientes/:id/pagos', puedeSeccion('clientes'), (req, res, next) => {
   try {
     const clienteId = Number(req.params.id);
     if (!Number.isInteger(clienteId) || clienteId <= 0) {
@@ -1735,7 +1836,7 @@ app.post('/api/clientes/:id/pagos', (req, res, next) => {
   }
 });
 
-app.get('/api/ventas', soloAdmin, (req, res, next) => {
+app.get('/api/ventas', puedeSeccion('estadisticas'), (req, res, next) => {
   try {
     const { periodo, valor, where, params } = parsePeriodoVentas(req.query);
 
@@ -1743,10 +1844,6 @@ app.get('/api/ventas', soloAdmin, (req, res, next) => {
     const ventas = filas.map(ventaConEstado);
 
     const totalPeriodo = round2(ventas.reduce((acc, venta) => acc + venta.total, 0));
-    const unidades = ventas.reduce(
-      (acc, venta) => acc + venta.items.reduce((suma, item) => suma + item.cantidad, 0),
-      0
-    );
 
     const acumulado = new Map();
     for (const venta of ventas) {
@@ -1757,17 +1854,34 @@ app.get('/api/ventas', soloAdmin, (req, res, next) => {
           nombre: item.nombre,
           categoria: item.categoria,
           cantidad: 0,
+          gramos: 0,
+          gramosPorUnidad: 0,
+          esPeso: item.tipo === 'peso',
           total: 0,
         };
-        actual.cantidad += item.cantidad;
+        if (actual.esPeso) {
+          actual.gramos += Number(item.cantidad) || 0;
+          actual.gramosPorUnidad = Number(item.gramosPorUnidad) || actual.gramosPorUnidad;
+        } else {
+          actual.cantidad += Number(item.cantidad) || 0;
+        }
         actual.total += item.subtotal;
         acumulado.set(clave, actual);
       }
     }
 
-    const masVendidos = [...acumulado.values()]
-      .map((item) => ({ ...item, total: round2(item.total) }))
-      .sort((a, b) => b.cantidad - a.cantidad || b.total - a.total);
+    const productosVendidos = [...acumulado.values()]
+      .map(({ gramos, gramosPorUnidad, esPeso, ...item }) => ({
+        ...item,
+        cantidad:
+          esPeso && gramosPorUnidad > 0 ? Math.floor(gramos / gramosPorUnidad) : item.cantidad,
+        total: round2(item.total),
+      }))
+      .filter((item) => item.cantidad > 0);
+    const unidades = productosVendidos.reduce((acc, item) => acc + item.cantidad, 0);
+    const masVendidos = productosVendidos
+      .sort((a, b) => b.cantidad - a.cantidad || b.total - a.total)
+      .slice(0, 10);
 
     res.json({
       periodo,
@@ -1778,6 +1892,8 @@ app.get('/api/ventas', soloAdmin, (req, res, next) => {
       unidades,
       masVendidos,
       series: construirSeries(periodo, valor, ventas),
+      mediosPago: resumenMediosPago(ventas),
+      vencidos: productosMasVencidos(),
     });
   } catch (error) {
     next(error);
@@ -1941,7 +2057,7 @@ app.post('/api/ventas', (req, res, next) => {
   }
 });
 
-app.put('/api/ventas/:id', soloAdmin, (req, res, next) => {
+app.put('/api/ventas/:id', puedeSeccion('estadisticas'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'Id inválido');
