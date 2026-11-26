@@ -18,7 +18,7 @@ import {
 const PERMISOS_USUARIO = [
   { id: 'inventario', etiqueta: 'Inventario' },
   { id: 'stock-bajo', etiqueta: 'Stock bajo' },
-  { id: 'movimientos', etiqueta: 'Movimientos' },
+  { id: 'movimientos', etiqueta: 'Movimientos de stock' },
   { id: 'estadisticas', etiqueta: 'Estadísticas' },
   { id: 'clientes', etiqueta: 'Clientes' },
   { id: 'caja', etiqueta: 'Caja' },

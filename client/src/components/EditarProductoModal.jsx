@@ -19,7 +19,6 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
     ),
   });
   const [motivoStock, setMotivoStock] = useState('');
-  const [tipoMotivo, setTipoMotivo] = useState('libre');
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [procesandoImagen, setProcesandoImagen] = useState(false);
@@ -32,7 +31,7 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
     form.cantidad !== '' &&
     Number.isInteger(cantidadNumero) &&
     cantidadNumero !== Number(producto.cantidad);
-  const motivoFinal = tipoMotivo === 'vencido' ? 'Producto vencido' : motivoStock.trim();
+  const motivoFinal = motivoStock.trim();
 
   function setCampo(campo, valor) {
     setForm((actual) => ({ ...actual, [campo]: valor }));
@@ -116,11 +115,6 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
       setError('Indicá el motivo del movimiento de stock');
       return;
     }
-    if (tipoMotivo === 'vencido' && cantidadNumero >= Number(producto.cantidad)) {
-      setError('Producto vencido solo se puede usar al reducir el stock');
-      return;
-    }
-
     setGuardando(true);
     try {
       await onGuardar(producto.id, {
@@ -274,28 +268,15 @@ export default function EditarProductoModal({ producto, categorias, onGuardar, o
 
         {stockCambia && (
           <div className="field stock-motivo-field">
-            <label htmlFor="editar-tipo-motivo">Motivo del movimiento de stock</label>
-            <select
-              id="editar-tipo-motivo"
-              value={tipoMotivo}
-              onChange={(event) => setTipoMotivo(event.target.value)}
-              disabled={guardando}
-            >
-              <option value="libre">Motivo libre</option>
-              <option value="vencido">Producto vencido</option>
-            </select>
-            {tipoMotivo === 'libre' ? (
-              <input
-                id="editar-motivo-stock"
-                type="text"
-                maxLength={200}
-                value={motivoStock}
-                placeholder="Ej: reposición de proveedor, rotura"
-                onChange={(e) => setMotivoStock(e.target.value)}
-              />
-            ) : (
-              <input id="editar-motivo-stock" type="text" value="Producto vencido" readOnly />
-            )}
+            <label htmlFor="editar-motivo-stock">Motivo del movimiento de stock</label>
+            <input
+              id="editar-motivo-stock"
+              type="text"
+              maxLength={200}
+              value={motivoStock}
+              placeholder="Ej: reposición de proveedor, rotura, vencimiento"
+              onChange={(e) => setMotivoStock(e.target.value)}
+            />
             <small className="field-hint">
               Queda registrado en Movimientos con la fecha y hora del cambio.
             </small>

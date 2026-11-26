@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
+import { toast } from 'react-toastify';
 import { api } from '../api.js';
-import { IconAlert, IconHistory, IconRefresh } from './Icons.jsx';
+import IngresoMercaderiaModal from './IngresoMercaderiaModal.jsx';
+import BajaProductoModal from './BajaProductoModal.jsx';
+import {
+  IconAlert,
+  IconHistory,
+  IconPlus,
+  IconRefresh,
+  IconTrash,
+  IconTruck,
+} from './Icons.jsx';
 import { formatFechaCorta, formatHora } from '../utils.js';
 
 const TIPOS = {
@@ -12,11 +22,14 @@ const TIPOS = {
 
 export default function MovimientosStock({ refreshKey }) {
   const [movimientos, setMovimientos] = useState([]);
+  const [ingresos, setIngresos] = useState([]);
   const [productos, setProductos] = useState([]);
   const [productoId, setProductoId] = useState('');
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
   const [recarga, setRecarga] = useState(0);
+  const [mostrandoIngreso, setMostrandoIngreso] = useState(false);
+  const [mostrandoBaja, setMostrandoBaja] = useState(false);
 
   useEffect(() => {
     let cancelado = false;
@@ -27,6 +40,7 @@ export default function MovimientosStock({ refreshKey }) {
       .then(([datos, listaProductos]) => {
         if (cancelado) return;
         setMovimientos(datos.movimientos ?? []);
+        setIngresos(datos.ingresos ?? []);
         setProductos(listaProductos);
       })
       .catch((err) => {
@@ -43,6 +57,23 @@ export default function MovimientosStock({ refreshKey }) {
 
   const productoElegido = productos.find((producto) => producto.id === Number(productoId));
 
+  async function registrarIngreso(items) {
+    await api.registrarIngresoMercaderia(items);
+    toast.success('Ingreso de mercadería registrado');
+    setRecarga((valor) => valor + 1);
+  }
+
+  async function registrarBaja(datos) {
+    await api.darBajaProducto(datos);
+    toast.success('Baja registrada');
+    setRecarga((valor) => valor + 1);
+  }
+
+  function unidadProducto(productoIdItem) {
+    const producto = productos.find((item) => item.id === productoIdItem);
+    return producto?.tipo === 'peso' ? 'g' : 'u.';
+  }
+
   return (
     <div className="movimientos-page">
       <div className="page-head">
@@ -54,6 +85,22 @@ export default function MovimientosStock({ refreshKey }) {
         </div>
 
         <div className="movimientos-controls">
+          <div className="movimientos-actions">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setMostrandoIngreso(true)}
+            >
+              <IconPlus size={15} /> Ingreso de mercadería
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger-ghost btn-sm"
+              onClick={() => setMostrandoBaja(true)}
+            >
+              <IconTrash size={15} /> Dar de baja un producto
+            </button>
+          </div>
           <div className="field">
             <label htmlFor="movimientos-producto">Producto</label>
             <select
@@ -156,6 +203,84 @@ export default function MovimientosStock({ refreshKey }) {
           </div>
         )}
       </section>
+
+      <section className="card movimientos-card" id="ingresos-por-lote">
+        <div className="movimientos-card-head">
+          <div>
+            <h2>Ingresos por lote</h2>
+            <small>
+              {productoElegido
+                ? `Lotes que incluyen ${productoElegido.nombre}`
+                : 'Se muestran los 100 lotes más recientes'}
+            </small>
+          </div>
+          <span className="count-pill">
+            {ingresos.length} {ingresos.length === 1 ? 'lote' : 'lotes'}
+          </span>
+        </div>
+
+        {cargando ? (
+          <div className="movimientos-lista">
+            {Array.from({ length: 2 }).map((_, indice) => (
+              <div key={indice} className="movimiento-row skeleton-movimiento" />
+            ))}
+          </div>
+        ) : ingresos.length === 0 ? (
+          <div className="empty-state inline">
+            <span className="empty-icon">
+              <IconTruck size={26} />
+            </span>
+            <h3>No hay ingresos registrados</h3>
+            <p>
+              Usá <strong>Ingreso de mercadería</strong> para cargar lotes nuevos en el stock.
+            </p>
+          </div>
+        ) : (
+          <div className="lotes-lista">
+            {ingresos.map((lote) => (
+              <article className="lote-card" key={lote.loteId ?? lote.fecha}>
+                <div className="lote-card-head">
+                  <strong>
+                    Lote #{lote.loteId ?? '—'} · {formatFechaCorta(lote.dia)}
+                  </strong>
+                  <small>{formatHora(lote.fecha)}</small>
+                </div>
+                <div className="lote-items">
+                  {lote.items.map((item, indice) => (
+                    <div className="lote-item" key={`${lote.loteId}-${item.productoId}-${indice}`}>
+                      <span className="lote-item-producto">{item.producto}</span>
+                      <span className="lote-item-cantidad">
+                        +{item.cantidad} {unidadProducto(item.productoId)}
+                      </span>
+                      <span className="lote-item-vencimiento">
+                        {item.fechaVencimiento
+                          ? `Vence ${formatFechaCorta(item.fechaVencimiento)}`
+                          : 'Sin vencimiento'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {mostrandoIngreso && (
+        <IngresoMercaderiaModal
+          productos={productos}
+          onGuardar={registrarIngreso}
+          onCerrar={() => setMostrandoIngreso(false)}
+        />
+      )}
+
+      {mostrandoBaja && (
+        <BajaProductoModal
+          productos={productos}
+          onGuardar={registrarBaja}
+          onCerrar={() => setMostrandoBaja(false)}
+        />
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { IconAlert, IconCheck, IconTag } from './Icons.jsx';
+import { IconAlert, IconCheck, IconTag, IconTruck } from './Icons.jsx';
 import { esProductoPeso, formatARS } from '../utils.js';
 
 function StockBajoCard({ producto }) {
@@ -55,7 +55,7 @@ function StockBajoCard({ producto }) {
   );
 }
 
-export default function StockBajo({ datos, cargando, onIrAInventario }) {
+export default function StockBajo({ datos, cargando, onIrAInventario, onIrAMovimientos }) {
   const productos = datos?.productos ?? [];
   const sinStock = productos.filter((producto) => producto.cantidad <= 0).length;
 
@@ -66,9 +66,16 @@ export default function StockBajo({ datos, cargando, onIrAInventario }) {
           <h1>Stock bajo</h1>
           <p>Productos por debajo del stock mínimo configurado. Avisá al administrador para reponerlos.</p>
         </div>
-        <span className="count-pill">
-          {productos.length} {productos.length === 1 ? 'producto' : 'productos'} en alerta
-        </span>
+        <div className="page-head-actions">
+          {onIrAMovimientos && (
+            <button type="button" className="btn btn-primary btn-sm" onClick={onIrAMovimientos}>
+              <IconTruck size={15} /> Reponer stock
+            </button>
+          )}
+          <span className="count-pill">
+            {productos.length} {productos.length === 1 ? 'producto' : 'productos'} en alerta
+          </span>
+        </div>
       </div>
 
       {cargando ? (

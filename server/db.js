@@ -74,7 +74,10 @@ db.exec(`
     cantidad_nueva INTEGER NOT NULL,
     delta INTEGER NOT NULL,
     fecha TEXT NOT NULL,
-    dia TEXT NOT NULL
+    dia TEXT NOT NULL,
+    lote_id INTEGER,
+    fecha_vencimiento TEXT,
+    cantidad_movimiento INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS retiros_caja (
@@ -172,6 +175,9 @@ db.exec(
    SET gramos_disponibles = gramos_por_unidad
    WHERE tipo = 'peso' AND cantidad > 0 AND gramos_por_unidad > 0 AND gramos_disponibles IS NULL`
 );
+asegurarColumna('movimientos_stock', 'lote_id', 'INTEGER');
+asegurarColumna('movimientos_stock', 'fecha_vencimiento', 'TEXT');
+asegurarColumna('movimientos_stock', 'cantidad_movimiento', 'INTEGER');
 asegurarColumna('ventas', 'cliente', 'TEXT');
 asegurarColumna('ventas', 'cliente_id', 'INTEGER');
 asegurarColumna('ventas', 'fiado', 'INTEGER NOT NULL DEFAULT 0');
@@ -268,6 +274,7 @@ asegurarColumna('cajas', 'abierto_por', 'INTEGER');
 asegurarColumna('cajas', 'cerrado_por', 'INTEGER');
 
 db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_movimientos_stock_lote ON movimientos_stock (lote_id);
   CREATE INDEX IF NOT EXISTS idx_cajas_dia ON cajas (dia);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_cajas_abierta
   ON cajas (dia)

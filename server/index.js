@@ -648,14 +648,18 @@ function registrarMovimientoStock({
   cantidadAnterior,
   cantidadNueva,
   fecha = new Date(),
+  loteId = null,
+  fechaVencimiento = null,
+  cantidadMovimiento = null,
 }) {
   const delta = Number(cantidadNueva) - Number(cantidadAnterior);
   if (!Number.isFinite(delta) || delta === 0) return;
   const iso = fecha.toISOString();
   db.prepare(
     `INSERT INTO movimientos_stock
-       (producto_id, producto_nombre, tipo, motivo, cantidad_anterior, cantidad_nueva, delta, fecha, dia)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (producto_id, producto_nombre, tipo, motivo, cantidad_anterior, cantidad_nueva, delta,
+        fecha, dia, lote_id, fecha_vencimiento, cantidad_movimiento)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     productoId,
     productoNombre,
@@ -665,7 +669,10 @@ function registrarMovimientoStock({
     cantidadNueva,
     delta,
     iso,
-    localDay(fecha)
+    localDay(fecha),
+    loteId,
+    fechaVencimiento,
+    cantidadMovimiento
   );
 }
 
@@ -1023,6 +1030,64 @@ app.get('/api/productos/buscar-codigo', (req, res, next) => {
   }
 });
 
+function parseCantidadMovimiento(valor, etiqueta = 'La cantidad') {
+  const cantidad = Number(valor);
+  if (!Number.isInteger(cantidad) || cantidad <= 0) {
+    throw httpError(400, `${etiqueta} debe ser un número entero mayor que 0`);
+  }
+  return cantidad;
+}
+
+function parseFechaVencimientoLote(valor) {
+  if (valor === undefined || valor === null || String(valor).trim() === '') return null;
+  const fecha = String(valor).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    throw httpError(400, 'La fecha de vencimiento del lote no es válida');
+  }
+  const [anio, mes, dia] = fecha.split('-').map(Number);
+  const validada = new Date(Date.UTC(anio, mes - 1, dia));
+  if (
+    validada.getUTCFullYear() !== anio ||
+    validada.getUTCMonth() !== mes - 1 ||
+    validada.getUTCDate() !== dia
+  ) {
+    throw httpError(400, 'La fecha de vencimiento del lote no es válida');
+  }
+  return fecha;
+}
+
+function ingresosPorLote(productoId = null) {
+  const filas = db
+    .prepare(
+      `SELECT * FROM movimientos_stock
+       WHERE tipo = 'ingreso'
+       ORDER BY fecha DESC, id DESC`
+    )
+    .all();
+  const lotes = new Map();
+  for (const fila of filas) {
+    const clave = fila.lote_id ?? `movimiento-${fila.id}`;
+    const lote = lotes.get(clave) ?? {
+      loteId: fila.lote_id,
+      fecha: fila.fecha,
+      dia: fila.dia,
+      items: [],
+    };
+    lote.items.push({
+      productoId: fila.producto_id,
+      producto: fila.producto_nombre,
+      cantidad: fila.cantidad_movimiento ?? fila.delta,
+      fechaVencimiento: fila.fecha_vencimiento,
+    });
+    lotes.set(clave, lote);
+  }
+  return [...lotes.values()]
+    .filter(
+      (lote) => !productoId || lote.items.some((item) => item.productoId === productoId)
+    )
+    .slice(0, 100);
+}
+
 app.get('/api/movimientos-stock', puedeSeccion('movimientos'), (req, res, next) => {
   try {
     const productoIdRaw = String(req.query.productoId ?? '').trim();
@@ -1062,9 +1127,168 @@ app.get('/api/movimientos-stock', puedeSeccion('movimientos'), (req, res, next) 
       delta: fila.delta,
       fecha: fila.fecha,
       dia: fila.dia,
+      loteId: fila.lote_id,
+      fechaVencimiento: fila.fecha_vencimiento,
+      cantidadMovimiento: fila.cantidad_movimiento,
     }));
 
-    res.json({ productoId, movimientos, total: movimientos.length });
+    res.json({
+      productoId,
+      movimientos,
+      total: movimientos.length,
+      ingresos: ingresosPorLote(productoId),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/movimientos-stock/ingreso', puedeSeccion('movimientos'), (req, res, next) => {
+  try {
+    const itemsRaw = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (itemsRaw.length === 0) throw httpError(400, 'Agregá al menos un producto');
+
+    const preparados = itemsRaw.map((item, indice) => {
+      const productoId = Number(item?.productoId ?? item?.producto_id);
+      if (!Number.isInteger(productoId) || productoId <= 0) {
+        throw httpError(400, `Elegí un producto creado en la fila ${indice + 1}`);
+      }
+      const producto = db.prepare('SELECT * FROM productos WHERE id = ?').get(productoId);
+      if (!producto) throw httpError(404, `El producto de la fila ${indice + 1} no existe`);
+      const cantidad = parseCantidadMovimiento(
+        item?.cantidad,
+        `La cantidad de ${producto.nombre}`
+      );
+      const fechaVencimiento = parseFechaVencimientoLote(
+        item?.fechaVencimiento ?? item?.fecha_vencimiento
+      );
+      if (fechaVencimiento) parseVencimiento({ productoId, fecha: fechaVencimiento });
+      return { producto, cantidad, fechaVencimiento };
+    });
+
+    let loteId;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      loteId = db
+        .prepare('SELECT COALESCE(MAX(lote_id), 0) + 1 AS lote FROM movimientos_stock')
+        .get().lote;
+      const fecha = new Date();
+      const actualizar = db.prepare(
+        'UPDATE productos SET cantidad = ?, gramos_disponibles = ? WHERE id = ?'
+      );
+      for (const { producto, cantidad, fechaVencimiento } of preparados) {
+        const cantidadAnterior = Number(producto.cantidad);
+        const gramosAnteriores = Number(producto.gramos_disponibles) || 0;
+        let cantidadNueva;
+        let gramosNuevos;
+        if (esProductoPeso(producto)) {
+          const resultado = stockPorGramos(producto, gramosDisponibles(producto) + cantidad);
+          cantidadNueva = resultado.cantidad;
+          gramosNuevos = resultado.gramosDisponibles;
+        } else {
+          cantidadNueva = cantidadAnterior + cantidad;
+          gramosNuevos = gramosAnteriores;
+        }
+        actualizar.run(cantidadNueva, gramosNuevos, producto.id);
+        registrarMovimientoStock({
+          productoId: producto.id,
+          productoNombre: producto.nombre,
+          tipo: 'ingreso',
+          motivo: 'Ingreso de mercadería',
+          cantidadAnterior,
+          cantidadNueva,
+          fecha,
+          loteId,
+          fechaVencimiento,
+          cantidadMovimiento: cantidad,
+        });
+        if (fechaVencimiento) {
+          db.prepare(
+            'INSERT INTO vencimientos (producto_id, producto, fecha) VALUES (?, ?, ?)'
+          ).run(producto.id, producto.nombre, fechaVencimiento);
+        }
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+
+    res.status(201).json({ ok: true, loteId, ingresos: ingresosPorLote() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/movimientos-stock/baja', puedeSeccion('movimientos'), (req, res, next) => {
+  try {
+    const productoId = Number(req.body?.productoId ?? req.body?.producto_id);
+    if (!Number.isInteger(productoId) || productoId <= 0) {
+      throw httpError(400, 'Elegí un producto creado');
+    }
+    const producto = db.prepare('SELECT * FROM productos WHERE id = ?').get(productoId);
+    if (!producto) throw httpError(404, 'El producto elegido no existe');
+
+    const cantidad = parseCantidadMovimiento(req.body?.cantidad, 'La cantidad');
+    const motivoElegido = String(req.body?.motivo ?? '').trim();
+    const motivoDetalle = String(req.body?.motivoDetalle ?? '').trim();
+    let motivo;
+    if (motivoElegido === 'Vencimiento' || motivoElegido === 'Rotura') {
+      motivo = motivoElegido;
+    } else if (motivoElegido === 'Otro') {
+      if (!motivoDetalle) throw httpError(400, 'Indicá el motivo de la baja');
+      if (motivoDetalle.length > 200) throw httpError(400, 'El motivo es demasiado largo');
+      motivo = `Otro: ${motivoDetalle}`;
+    } else {
+      throw httpError(400, 'Elegí un motivo válido');
+    }
+
+    const disponible = esProductoPeso(producto)
+      ? gramosDisponibles(producto)
+      : Number(producto.cantidad) || 0;
+    if (cantidad > disponible) {
+      throw httpError(409, `Stock insuficiente para ${producto.nombre} (disponible: ${disponible})`);
+    }
+
+    const cantidadAnterior = Number(producto.cantidad);
+    const gramosAnteriores = Number(producto.gramos_disponibles) || 0;
+    let cantidadNueva;
+    let gramosNuevos;
+    if (esProductoPeso(producto)) {
+      const resultado = stockPorGramos(producto, disponible - cantidad);
+      cantidadNueva = resultado.cantidad;
+      gramosNuevos = resultado.gramosDisponibles;
+    } else {
+      cantidadNueva = cantidadAnterior - cantidad;
+      gramosNuevos = gramosAnteriores;
+    }
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE productos SET cantidad = ?, gramos_disponibles = ? WHERE id = ?').run(
+        cantidadNueva,
+        gramosNuevos,
+        productoId
+      );
+      registrarMovimientoStock({
+        productoId,
+        productoNombre: producto.nombre,
+        tipo: 'ajuste',
+        motivo,
+        cantidadAnterior,
+        cantidadNueva,
+        cantidadMovimiento: cantidad,
+      });
+      if (cantidadNueva === 0 && motivo !== 'Vencimiento') {
+        borrarVencimientosSiStockCero(productoId);
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+
+    res.json({ ok: true, cantidadNueva, gramosNuevos, motivo });
   } catch (error) {
     next(error);
   }
@@ -1685,9 +1909,12 @@ function resumenMediosPago(ventas) {
 function productosMasVencidos() {
   return db
     .prepare(
-      `SELECT producto_id AS productoId, producto_nombre AS producto, SUM(-delta) AS unidades
+      `SELECT producto_id AS productoId, producto_nombre AS producto,
+              SUM(ABS(COALESCE(cantidad_movimiento, delta))) AS unidades
        FROM movimientos_stock
-       WHERE tipo = 'ajuste' AND motivo = 'Producto vencido' AND delta < 0
+       WHERE tipo = 'ajuste'
+         AND motivo IN ('Vencimiento', 'Producto vencido')
+         AND (delta < 0 OR cantidad_movimiento > 0)
        GROUP BY producto_id, producto_nombre
        ORDER BY unidades DESC
        LIMIT 10`

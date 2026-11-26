@@ -40,7 +40,7 @@ import {
 const TABS = [
   { id: 'inventario', etiqueta: 'Inventario', Icono: IconBox },
   { id: 'stock-bajo', etiqueta: 'Stock bajo', Icono: IconAlert },
-  { id: 'movimientos', etiqueta: 'Movimientos', Icono: IconHistory },
+  { id: 'movimientos', etiqueta: 'Movimientos de stock', Icono: IconHistory },
   { id: 'estadisticas', etiqueta: 'Estadísticas', Icono: IconChart },
   { id: 'clientes', etiqueta: 'Clientes', Icono: IconUsers },
   { id: 'caja', etiqueta: 'Caja', Icono: IconWallet },
@@ -856,6 +856,9 @@ export default function App() {
             datos={stockBajo}
             cargando={cargandoStockBajo}
             onIrAInventario={() => setTab('inventario')}
+            onIrAMovimientos={
+              seccionesVisibles.includes('movimientos') ? () => setTab('movimientos') : null
+            }
           />
         )}
 

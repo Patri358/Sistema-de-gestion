@@ -182,6 +182,18 @@ export const api = {
     const qs = params.toString();
     return request(`/movimientos-stock${qs ? `?${qs}` : ''}`);
   },
+  registrarIngresoMercaderia(items) {
+    return request('/movimientos-stock/ingreso', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
+  },
+  darBajaProducto(datos) {
+    return request('/movimientos-stock/baja', {
+      method: 'POST',
+      body: JSON.stringify(datos),
+    });
+  },
   getCaja() {
     return request('/caja');
   },

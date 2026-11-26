@@ -5663,3 +5663,164 @@ select:focus {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-stack .field {
+  margin-bottom: 0;
+}
+
+.product-search {
+  position: relative;
+}
+
+.product-search-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+}
+
+.product-search-list button {
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.product-search-list button:hover,
+.product-search-list button.seleccionado {
+  background: var(--surface);
+  color: var(--primary);
+}
+
+.product-search-empty {
+  display: block;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.opcional {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.movimientos-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ingreso-filas {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ingreso-fila {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1.2fr) 34px;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.ingreso-fila .field {
+  margin-bottom: 0;
+}
+
+.ingreso-quitar {
+  align-self: end;
+  margin-bottom: 2px;
+}
+
+.lotes-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lote-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.lote-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.lote-card-head small {
+  color: var(--muted);
+}
+
+.lote-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.lote-item {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) 110px minmax(0, 1.4fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+.lote-item:first-child {
+  border-top: 0;
+}
+
+.lote-item-cantidad {
+  color: var(--green);
+  font-weight: 700;
+  text-align: right;
+}
+
+.lote-item-vencimiento {
+  color: var(--muted);
+  text-align: right;
+}
+
+@media (max-width: 700px) {
+  .ingreso-fila {
+    grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .lote-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .lote-item-vencimiento {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+}
